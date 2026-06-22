@@ -80,6 +80,12 @@ jobs:
         with:
           node-version: '22'
 
+      # ── 2.5 Set up Python (for generateExcelReport.py) ───────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       # ── 3. Install k6 via Grafana's official action ──────────────────────────
       - name: Set up k6
         uses: grafana/setup-k6-action@v1
@@ -194,6 +200,20 @@ jobs:
             echo "k6-summary.json was not generated. Check the **Run k6 Load Test** step logs." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # ── 8.5 Generate Professional Excel Report ────────────────────────────────
+      - name: Generate Professional Excel Report
+        if: always()
+        run: |
+          if [ -f k6-summary.json ] && [ -f k6-results.ndjson ]; then
+            echo "🐍 Installing Python dependencies (pandas, openpyxl) ..."
+            python -m pip install --upgrade pip
+            pip install pandas openpyxl
+            echo "📊 Generating Excel report (TripSync_Backend_LoadTest_Report.xlsx) ..."
+            python scripts/generateExcelReport.py k6-summary.json k6-results.ndjson TripSync_Backend_LoadTest_Report.xlsx
+          else
+            echo "⚠️  Missing k6 result files, skipping Excel generation."
+          fi
+
       # ── 9. Upload k6-summary.json artifact ────────────────────────────────────
       - name: Upload k6 Summary JSON
         if: always()
@@ -201,6 +221,15 @@ jobs:
         with:
           name: k6-summary-json
           path: k6-summary.json
+          retention-days: 30
+
+      # ── 9.5 Upload Load Test Excel Report Artifact ────────────────────────────
+      - name: Upload Load Test Excel Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TripSync-Backend-LoadTest-Report
+          path: TripSync_Backend_LoadTest_Report.xlsx
           retention-days: 30
 
       # ── 10. Upload HTML report artifact ───────────────────────────────────────
@@ -229,6 +258,6 @@ jobs:
             echo "✅ All k6 thresholds MET — load test PASSED."
           else
             echo "❌ One or more k6 thresholds EXCEEDED — load test FAILED."
-            echo "   ↳ Download the 'k6-summary-json' artifact for details."
+            echo "   ↳ Download the 'k6-summary-json' or 'TripSync-Backend-LoadTest-Report' artifact for details."
             echo "   ↳ View the Step Summary for a metrics breakdown."
           fi
