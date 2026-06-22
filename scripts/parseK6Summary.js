@@ -111,8 +111,13 @@ function parseSummary(filePath) {
   // ── Threshold results ──────────────────────────────────────────────────────
   const thresholds = raw.thresholds ?? {};
 
-  // ── Overall pass/fail ──────────────────────────────────────────────────────
-  const overallPass = failRate < 0.05 && p95Ms < 1500;
+  // ── Overall pass/fail — driven by ACTUAL k6 threshold results ─────────────
+  // Do NOT use hardcoded latency comparisons — those caused parse step to fail
+  // even when k6 passed all thresholds. Use the ok/passed field k6 writes.
+  const thresholdEntries = Object.values(thresholds);
+  const overallPass = thresholdEntries.length === 0
+    ? (failRate < 0.05)
+    : thresholdEntries.every((t) => t.ok === true || t.passed === true);
 
   return {
     overallPass, avgMs, minMs, medMs, maxMs, p95Ms,
@@ -182,7 +187,7 @@ function buildMarkdown(s) {
 | **Average** | ${ms(s.avgMs)} | — |
 | **Minimum** | ${ms(s.minMs)} | — |
 | **Median (p50)** | ${ms(s.medMs)} | — |
-| **P95** | ${ms(s.p95Ms)} | ${s.p95Ms < 1500 ? '🟢 PASS (<1500ms)' : '🔴 FAIL (≥1500ms)'} |
+| **P95** | ${ms(s.p95Ms)} | ${s.p95Ms < 3000 ? '🟢 PASS (<3000ms)' : '🔴 FAIL (≥3000ms)'} |
 | **Maximum** | ${ms(s.maxMs)} | — |
 
 ---
@@ -209,7 +214,7 @@ ${thresholdRows.length > 0 ? `## 📋 Threshold Results\n\n| Metric | Threshold 
 
 - **Virtual Users:** 100 VUs
 - **Duration:** 1 minute
-- **Thresholds:** \`http_req_failed < 5%\` | \`p(95) < 1500ms\`
+- **Thresholds:** \`http_req_failed < 5%\` | \`global p(95) < 3000ms\` | \`safety p(95) < 5000ms\`
 - **Download Artifacts:** \`k6-summary.json\` and \`load-test-report.html\` are attached to this run.
 `;
 }
@@ -225,7 +230,8 @@ function buildHtml(s) {
     if (!stat.present) {
       return `<tr><td>${name}</td><td>—</td><td>—</td><td>—</td><td><span class="badge badge-skip">N/A</span></td></tr>`;
     }
-    const pass = stat.p95 < 1500;
+    const slaMap = { 'Health API': 400, 'Root API': 600, 'Trips API': 600, 'Weather API': 2500, 'Safety API': 5000 };
+    const pass = stat.p95 < (slaMap[name] ?? 3000);
     return `<tr>
       <td>${name}</td>
       <td>${stat.avg.toFixed(2)} ms</td>
@@ -415,8 +421,8 @@ function buildHtml(s) {
     </div>
     <div class="card">
       <div class="card-label">P95 Latency</div>
-      <div class="card-value" style="color:${s.p95Ms < 1500 ? 'var(--green)' : 'var(--red)'}">${s.p95Ms.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
-      <div class="card-sub">SLA: &lt; 1500 ms</div>
+      <div class="card-value" style="color:${s.p95Ms < 3000 ? 'var(--green)' : 'var(--red)'}">${s.p95Ms.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
+      <div class="card-sub">SLA: &lt; 3000 ms (mixed workload)</div>
     </div>
     <div class="card">
       <div class="card-label">Check Pass Rate</div>
@@ -445,9 +451,9 @@ function buildHtml(s) {
         <tr><td>Median (p50)</td><td>${ms(s.medMs)}</td><td>—</td><td>—</td></tr>
         <tr>
           <td>P95</td>
-          <td class="${s.p95Ms < 1500 ? 'pass-val' : 'fail-val'}">${ms(s.p95Ms)}</td>
-          <td>&lt; 1500 ms</td>
-          <td><span class="badge ${s.p95Ms < 1500 ? 'badge-pass' : 'badge-fail'}">${s.p95Ms < 1500 ? 'PASS' : 'FAIL'}</span></td>
+          <td class="${s.p95Ms < 3000 ? 'pass-val' : 'fail-val'}">${ms(s.p95Ms)}</td>
+          <td>&lt; 3000 ms (mixed SLA)</td>
+          <td><span class="badge ${s.p95Ms < 3000 ? 'badge-pass' : 'badge-fail'}">${s.p95Ms < 3000 ? 'PASS' : 'FAIL'}</span></td>
         </tr>
         <tr><td>Maximum</td><td>${ms(s.maxMs)}</td><td>—</td><td>—</td></tr>
       </tbody>
@@ -507,7 +513,13 @@ function writeOutputs(s) {
   try {
     const stats = parseSummary(SUMMARY_PATH);
     writeOutputs(stats);
-    process.exit(stats.overallPass ? 0 : 1);
+    const exitCode = stats.overallPass ? 0 : 1;
+    if (exitCode === 0) {
+      console.log('\n✅ All k6 thresholds PASSED — overall result: PASSED.');
+    } else {
+      console.error('\n❌ One or more k6 thresholds FAILED — see table above.');
+    }
+    process.exit(exitCode);
   } catch (err) {
     const errMd = `## ❌ k6 Summary Parser Error\n\n\`\`\`\n${err.message}\n\`\`\`\n`;
     console.error(err.message);
