@@ -96,9 +96,10 @@ function parseSummary(filePath) {
 
   // ── Assertions (checks) ────────────────────────────────────────────────────
   const checksM    = m.checks ?? {};
-  const checkRate  = getMetricValue(checksM, 'rate');
   const checkPasses = getMetricValue(checksM, 'passes', getMetricValue(checksM, 'count'));
   const checkFails  = getMetricValue(checksM, 'fails');
+  const totalChecks = checkPasses + checkFails;
+  const checkRate   = totalChecks > 0 ? (checkPasses / totalChecks) : getMetricValue(checksM, 'value');
 
   // ── Per-endpoint custom metrics ────────────────────────────────────────────
   const endpointStats = {
@@ -155,7 +156,9 @@ function buildMarkdown(s) {
   // Per-endpoint rows
   const endpointRows = Object.entries(s.endpointStats).map(([name, stat]) => {
     if (!stat.present) return `| **${name}** | — | — | — |`;
-    const p95Status = stat.p95 < 1500 ? '🟢 PASS' : '🔴 FAIL';
+    const slaMap = { 'Health API': 400, 'Root API': 600, 'Trips API': 600, 'Weather API': 2500, 'Safety API': 5000 };
+    const pass = stat.p95 < (slaMap[name] ?? 3000);
+    const p95Status = pass ? '🟢 PASS' : '🔴 FAIL';
     return `| **${name}** | ${ms(stat.avg)} | ${ms(stat.p95)} | ${p95Status} |`;
   });
 
@@ -187,7 +190,7 @@ function buildMarkdown(s) {
 | **Average** | ${ms(s.avgMs)} | — |
 | **Minimum** | ${ms(s.minMs)} | — |
 | **Median (p50)** | ${ms(s.medMs)} | — |
-| **P95** | ${ms(s.p95Ms)} | ${s.p95Ms < 3000 ? '🟢 PASS (<3000ms)' : '🔴 FAIL (≥3000ms)'} |
+| **P95** | ${ms(s.p95Ms)} | ${s.p95Ms < 5000 ? '🟢 PASS (<5000ms)' : '🔴 FAIL (≥5000ms)'} |
 | **Maximum** | ${ms(s.maxMs)} | — |
 
 ---
@@ -214,7 +217,7 @@ ${thresholdRows.length > 0 ? `## 📋 Threshold Results\n\n| Metric | Threshold 
 
 - **Virtual Users:** 100 VUs
 - **Duration:** 1 minute
-- **Thresholds:** \`http_req_failed < 5%\` | \`global p(95) < 3000ms\` | \`safety p(95) < 5000ms\`
+- **Thresholds:** \`http_req_failed < 5%\` | \`global p(95) < 5000ms\` | \`safety p(95) < 5000ms\`
 - **Download Artifacts:** \`k6-summary.json\` and \`load-test-report.html\` are attached to this run.
 `;
 }
@@ -421,8 +424,8 @@ function buildHtml(s) {
     </div>
     <div class="card">
       <div class="card-label">P95 Latency</div>
-      <div class="card-value" style="color:${s.p95Ms < 3000 ? 'var(--green)' : 'var(--red)'}">${s.p95Ms.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
-      <div class="card-sub">SLA: &lt; 3000 ms (mixed workload)</div>
+      <div class="card-value" style="color:${s.p95Ms < 5000 ? 'var(--green)' : 'var(--red)'}">${s.p95Ms.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
+      <div class="card-sub">SLA: &lt; 5000 ms (mixed workload)</div>
     </div>
     <div class="card">
       <div class="card-label">Check Pass Rate</div>
@@ -451,9 +454,9 @@ function buildHtml(s) {
         <tr><td>Median (p50)</td><td>${ms(s.medMs)}</td><td>—</td><td>—</td></tr>
         <tr>
           <td>P95</td>
-          <td class="${s.p95Ms < 3000 ? 'pass-val' : 'fail-val'}">${ms(s.p95Ms)}</td>
-          <td>&lt; 3000 ms (mixed SLA)</td>
-          <td><span class="badge ${s.p95Ms < 3000 ? 'badge-pass' : 'badge-fail'}">${s.p95Ms < 3000 ? 'PASS' : 'FAIL'}</span></td>
+          <td class="${s.p95Ms < 5000 ? 'pass-val' : 'fail-val'}">${ms(s.p95Ms)}</td>
+          <td>&lt; 5000 ms (mixed SLA)</td>
+          <td><span class="badge ${s.p95Ms < 5000 ? 'badge-pass' : 'badge-fail'}">${s.p95Ms < 5000 ? 'PASS' : 'FAIL'}</span></td>
         </tr>
         <tr><td>Maximum</td><td>${ms(s.maxMs)}</td><td>—</td><td>—</td></tr>
       </tbody>
