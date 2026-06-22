@@ -1,0 +1,217 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TripSync Backend — API Load Tests (k6)
+# Repository: https://github.com/abineshh502/TripSync_Backend
+# ─────────────────────────────────────────────────────────────────────────────
+# Appears in GitHub Actions as:
+#   Actions → Backend Load Tests → Run Workflow
+#
+# Trigger:
+#   - Push / PR to main when backend files change
+#   - Manual "Run Workflow" button (workflow_dispatch)
+#
+# Steps:
+#   1. Checkout backend repo
+#   2. Set up Node.js (parseK6Summary.js)
+#   3. Install k6 via grafana/setup-k6-action
+#   4. Resolve target backend URL
+#   5. Pre-flight health check
+#   6. Run k6 load test (100 VUs · 1 min) → k6-summary.json
+#   7. Parse summary → GitHub Step Summary + load-test-report.html
+#   8. Upload artifacts: k6-summary.json, load-test-report.html
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Backend Load Tests
+
+on:
+  push:
+    paths:
+      - 'main.py'
+      - 'src/**'
+      - 'requirements.txt'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/load-test.yml'
+    branches: [ main ]
+
+  pull_request:
+    paths:
+      - 'main.py'
+      - 'src/**'
+      - 'requirements.txt'
+      - 'tests/**'
+      - 'scripts/**'
+    branches: [ main ]
+
+  # ── Manual trigger ──────────────────────────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: 'Backend URL to target (leave blank to use BACKEND_URL secret)'
+        required: false
+        default: ''
+      vus:
+        description: 'Number of Virtual Users (default: 100)'
+        required: false
+        default: '100'
+      duration:
+        description: 'Test duration e.g. 1m, 30s, 2m (default: 1m)'
+        required: false
+        default: '1m'
+
+# Cancel any in-progress run on the same branch/PR
+concurrency:
+  group: backend-load-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  load-test:
+    name: k6 Load Test — ${{ github.event.inputs.vus || '100' }} VUs / ${{ github.event.inputs.duration || '1m' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js (for parseK6Summary.js) ────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # ── 3. Install k6 via Grafana's official action ──────────────────────────
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+
+      # ── 4. Verify tools ───────────────────────────────────────────────────────
+      - name: Verify Tool Versions
+        run: |
+          echo "=== k6 ==="
+          k6 version
+          echo "=== Node.js ==="
+          node --version
+          echo "=== npm ==="
+          npm --version
+
+      # ── 5. Resolve target backend URL ────────────────────────────────────────
+      # Priority: workflow_dispatch input → BACKEND_URL secret → fallback URL
+      - name: Resolve Backend URL
+        id: resolve_url
+        run: |
+          INPUT_URL="${{ github.event.inputs.backend_url }}"
+          SECRET_URL="${{ secrets.BACKEND_URL }}"
+          FALLBACK_URL="https://tripsync-backend.onrender.com"
+
+          if [ -n "$INPUT_URL" ]; then
+            TARGET_URL="$INPUT_URL"
+            echo "📌 Source: workflow_dispatch input"
+          elif [ -n "$SECRET_URL" ]; then
+            TARGET_URL="$SECRET_URL"
+            echo "📌 Source: BACKEND_URL repository secret"
+          else
+            TARGET_URL="$FALLBACK_URL"
+            echo "📌 Source: hardcoded fallback URL"
+            echo "⚠️  Add a BACKEND_URL secret at Settings → Secrets → Actions for reliability."
+          fi
+
+          echo "🎯 Target: $TARGET_URL"
+          echo "TARGET_URL=$TARGET_URL" >> "$GITHUB_OUTPUT"
+
+      # ── 6. Pre-flight health check ────────────────────────────────────────────
+      - name: Pre-flight Health Check
+        run: |
+          URL="${{ steps.resolve_url.outputs.TARGET_URL }}"
+          echo "🏥 Health-checking $URL ..."
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 15 --retry 3 --retry-delay 5 \
+            "$URL/" 2>/dev/null || echo "000")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Backend is healthy (HTTP $HTTP_CODE)"
+          else
+            echo "⚠️  Backend returned HTTP $HTTP_CODE — load test will still run."
+            echo "   Verify BACKEND_URL secret if this is unexpected."
+          fi
+
+      # ── 7. Run k6 Load Test ───────────────────────────────────────────────────
+      - name: Run k6 Load Test
+        id: k6_run
+        env:
+          BACKEND_URL: ${{ steps.resolve_url.outputs.TARGET_URL }}
+        run: |
+          VUS="${{ github.event.inputs.vus || '100' }}"
+          DURATION="${{ github.event.inputs.duration || '1m' }}"
+
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║   TripSync Backend — k6 Load Test            ║"
+          echo "╚══════════════════════════════════════════════╝"
+          echo "🎯  Target  : $BACKEND_URL"
+          echo "👥  VUs     : $VUS"
+          echo "⏱   Duration: $DURATION"
+          echo ""
+
+          # Run k6; export summary JSON and raw NDJSON results
+          k6 run \
+            --vus "$VUS" \
+            --duration "$DURATION" \
+            --summary-export=k6-summary.json \
+            --out json=k6-results.ndjson \
+            tests/load-test.js
+
+      # ── 8. Parse summary → Step Summary + HTML ────────────────────────────────
+      - name: Parse k6 Summary & Publish Report
+        if: always()   # run even when thresholds fail so we always get a report
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_SHA:        ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -f k6-summary.json ]; then
+            echo "📊 Parsing k6-summary.json ..."
+            node scripts/parseK6Summary.js k6-summary.json
+          else
+            echo "⚠️  k6-summary.json not found — k6 may have crashed before completing."
+            echo "## ⚠️ Load Test Incomplete" >> "$GITHUB_STEP_SUMMARY"
+            echo "k6-summary.json was not generated. Check the **Run k6 Load Test** step logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── 9. Upload k6-summary.json artifact ────────────────────────────────────
+      - name: Upload k6 Summary JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary-json
+          path: k6-summary.json
+          retention-days: 30
+
+      # ── 10. Upload HTML report artifact ───────────────────────────────────────
+      - name: Upload Load Test HTML Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-report-html
+          path: load-test-report.html
+          retention-days: 30
+
+      # ── 11. Upload raw k6 NDJSON (optional, debug use) ────────────────────────
+      - name: Upload Raw k6 Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-raw-results
+          path: k6-results.ndjson
+          retention-days: 7
+
+      # ── 12. Final pass/fail annotation ───────────────────────────────────────
+      - name: Summarise Load Test Outcome
+        if: always()
+        run: |
+          if [ "${{ steps.k6_run.outcome }}" = "success" ]; then
+            echo "✅ All k6 thresholds MET — load test PASSED."
+          else
+            echo "❌ One or more k6 thresholds EXCEEDED — load test FAILED."
+            echo "   ↳ Download the 'k6-summary-json' artifact for details."
+            echo "   ↳ View the Step Summary for a metrics breakdown."
+          fi
