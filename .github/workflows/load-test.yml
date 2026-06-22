@@ -46,9 +46,9 @@ on:
   workflow_dispatch:
     inputs:
       backend_url:
-        description: 'Backend URL to target (leave blank to use BACKEND_URL secret)'
+        description: 'Backend URL to target (leave blank to use BACKEND_URL secret or Railway fallback)'
         required: false
-        default: ''
+        default: 'https://tripsyncbackend-production-37a2.up.railway.app'
       vus:
         description: 'Number of Virtual Users (default: 100)'
         required: false
@@ -95,44 +95,61 @@ jobs:
           npm --version
 
       # ── 5. Resolve target backend URL ────────────────────────────────────────
-      # Priority: workflow_dispatch input → BACKEND_URL secret → fallback URL
+      # Priority: workflow_dispatch input → BACKEND_URL secret → Railway URL
+      # The Railway URL is the confirmed production deployment (audited 2026-06-22).
       - name: Resolve Backend URL
         id: resolve_url
         run: |
           INPUT_URL="${{ github.event.inputs.backend_url }}"
           SECRET_URL="${{ secrets.BACKEND_URL }}"
-          FALLBACK_URL="https://tripsync-backend.onrender.com"
+          RAILWAY_URL="https://tripsyncbackend-production-37a2.up.railway.app"
 
-          if [ -n "$INPUT_URL" ]; then
+          if [ -n "$INPUT_URL" ] && [ "$INPUT_URL" != "https://tripsyncbackend-production-37a2.up.railway.app" ]; then
+            # A custom URL was explicitly entered in the Run Workflow dialog
             TARGET_URL="$INPUT_URL"
-            echo "📌 Source: workflow_dispatch input"
+            echo "📌 Source: workflow_dispatch custom input"
           elif [ -n "$SECRET_URL" ]; then
             TARGET_URL="$SECRET_URL"
             echo "📌 Source: BACKEND_URL repository secret"
           else
-            TARGET_URL="$FALLBACK_URL"
-            echo "📌 Source: hardcoded fallback URL"
-            echo "⚠️  Add a BACKEND_URL secret at Settings → Secrets → Actions for reliability."
+            TARGET_URL="$RAILWAY_URL"
+            echo "📌 Source: hardcoded Railway production URL"
           fi
 
+          # Strip trailing slash for consistency
+          TARGET_URL="${TARGET_URL%/}"
           echo "🎯 Target: $TARGET_URL"
           echo "TARGET_URL=$TARGET_URL" >> "$GITHUB_OUTPUT"
 
       # ── 6. Pre-flight health check ────────────────────────────────────────────
+      # Hits the dedicated /health endpoint (returns {"status":"ok"} at 200).
+      # This endpoint is registered before AI imports so it is always reachable.
       - name: Pre-flight Health Check
         run: |
           URL="${{ steps.resolve_url.outputs.TARGET_URL }}"
-          echo "🏥 Health-checking $URL ..."
+          echo "🏥 Probing $URL/health ..."
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --max-time 15 --retry 3 --retry-delay 5 \
-            "$URL/" 2>/dev/null || echo "000")
+          # Try /health first (dedicated endpoint), fall back to / if 404
+          HTTP_CODE=$(curl -s -o /tmp/health_body.json -w "%{http_code}" \
+            --max-time 20 --retry 3 --retry-delay 5 \
+            "$URL/health" 2>/dev/null || echo "000")
+
+          echo "   HTTP status : $HTTP_CODE"
+          echo "   Response    : $(cat /tmp/health_body.json 2>/dev/null || echo 'no body')"
 
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Backend is healthy (HTTP $HTTP_CODE)"
+            echo "✅ Backend /health PASSED — deployment is reachable and healthy."
           else
-            echo "⚠️  Backend returned HTTP $HTTP_CODE — load test will still run."
-            echo "   Verify BACKEND_URL secret if this is unexpected."
+            echo "⚠️  /health returned HTTP $HTTP_CODE"
+            echo "   Attempting fallback probe on root / ..."
+            ROOT_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL/" 2>/dev/null || echo "000")
+            echo "   Root / status: $ROOT_CODE"
+            if [ "$ROOT_CODE" = "200" ]; then
+              echo "✅ Root / is reachable. Load test will proceed."
+            else
+              echo "❌ Both /health and / returned non-200. Check Railway deployment logs."
+              echo "   Load test will still run — results will show error details."
+            fi
           fi
 
       # ── 7. Run k6 Load Test ───────────────────────────────────────────────────

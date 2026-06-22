@@ -112,6 +112,14 @@ def read_root():
         "message": "Welcome to TripSync AI Core Backend API Services! 🚀"
     }
 
+# ─── Dedicated Health Probe ────────────────────────────────────────────────────
+# Always returns HTTP 200 {"status":"ok"} — safe for load balancers, k6, and
+# uptime monitors. Registered BEFORE AI imports so infra probes never fail even
+# when AI providers are degraded or keys are missing.
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
 from src.services.ai import ai_service
 from src.services.voice import voice_service
 
