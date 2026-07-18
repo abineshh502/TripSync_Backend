@@ -68,6 +68,9 @@ jobs:
     name: k6 Load Test — ${{ github.event.inputs.vus || '100' }} VUs / ${{ github.event.inputs.duration || '1m' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
@@ -220,7 +223,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: k6-summary-json
-          path: k6-summary.json
+          path: backend/k6-summary.json
           retention-days: 30
 
       # ── 9.5 Upload Load Test Excel Report Artifact ────────────────────────────
@@ -229,7 +232,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TripSync-Backend-LoadTest-Report
-          path: TripSync_Backend_LoadTest_Report.xlsx
+          path: backend/TripSync_Backend_LoadTest_Report.xlsx
           retention-days: 30
 
       # ── 10. Upload HTML report artifact ───────────────────────────────────────
@@ -238,7 +241,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: load-test-report-html
-          path: load-test-report.html
+          path: backend/load-test-report.html
           retention-days: 30
 
       # ── 11. Upload raw k6 NDJSON (optional, debug use) ────────────────────────
@@ -247,7 +250,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: k6-raw-results
-          path: k6-results.ndjson
+          path: backend/k6-results.ndjson
           retention-days: 7
 
       # ── 12. Final pass/fail annotation ───────────────────────────────────────
