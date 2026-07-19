@@ -1,0 +1,163 @@
+{
+  "version": "1.0.0",
+  "scanner": "TripSync Backend SAST Scanner",
+  "target": "FastAPI / Python",
+  "framework_detection": {
+    "fastapi": ["from fastapi", "FastAPI(", "APIRouter"],
+    "flask": ["from flask", "Flask(__name__", "@app.route"]
+  },
+  "rules": {
+    "authentication": {
+      "enabled": true,
+      "checks": [
+        "missing_auth_dependency",
+        "unprotected_endpoint",
+        "missing_jwt_verification",
+        "firebase_token_not_verified",
+        "missing_bearer_token_check",
+        "otp_in_response"
+      ]
+    },
+    "authorization": {
+      "enabled": true,
+      "checks": [
+        "missing_role_check",
+        "user_id_from_request_body",
+        "missing_ownership_check",
+        "privilege_escalation_risk"
+      ]
+    },
+    "injection": {
+      "enabled": true,
+      "checks": [
+        "sql_injection",
+        "command_injection",
+        "path_traversal",
+        "template_injection",
+        "eval_usage",
+        "exec_usage"
+      ]
+    },
+    "cors": {
+      "enabled": true,
+      "checks": [
+        "wildcard_cors_with_credentials",
+        "unrestricted_methods",
+        "unrestricted_headers",
+        "wildcard_origins"
+      ]
+    },
+    "secrets": {
+      "enabled": true,
+      "checks": [
+        "hardcoded_api_key",
+        "hardcoded_password",
+        "hardcoded_token",
+        "env_var_not_used",
+        "secret_in_log"
+      ]
+    },
+    "file_upload": {
+      "enabled": true,
+      "checks": [
+        "missing_file_type_validation",
+        "missing_file_size_limit",
+        "unsafe_temp_file_handling",
+        "path_traversal_in_filename"
+      ]
+    },
+    "exception_handling": {
+      "enabled": true,
+      "checks": [
+        "bare_except",
+        "error_details_in_response",
+        "missing_exception_handler",
+        "silent_exception"
+      ]
+    },
+    "logging": {
+      "enabled": true,
+      "checks": [
+        "sensitive_data_logged",
+        "missing_audit_log",
+        "otp_logged_in_plaintext"
+      ]
+    },
+    "rate_limiting": {
+      "enabled": true,
+      "checks": [
+        "missing_rate_limiting",
+        "missing_slowapi",
+        "unbounded_endpoint"
+      ]
+    },
+    "input_validation": {
+      "enabled": true,
+      "checks": [
+        "missing_input_validation",
+        "arbitrary_dict_input",
+        "unvalidated_query_params"
+      ]
+    },
+    "dependencies": {
+      "enabled": true,
+      "checks": [
+        "outdated_packages",
+        "known_vulnerabilities",
+        "missing_version_pins"
+      ]
+    }
+  },
+  "severity_levels": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"],
+  "scan_paths": [
+    "main.py",
+    "src/**",
+    "routes/**",
+    "controllers/**",
+    "middleware/**",
+    "services/**",
+    "config/**",
+    "utils/**",
+    "requirements.txt",
+    ".env*"
+  ],
+  "exclude_paths": [
+    "__pycache__/**",
+    ".git/**",
+    "SecurityTest/**",
+    "tests/**",
+    ".github/**",
+    "venv/**",
+    ".venv/**"
+  ],
+  "owasp_categories": {
+    "A01": "Broken Access Control",
+    "A02": "Cryptographic Failures",
+    "A03": "Injection",
+    "A04": "Insecure Design",
+    "A05": "Security Misconfiguration",
+    "A06": "Vulnerable and Outdated Components",
+    "A07": "Identification and Authentication Failures",
+    "A08": "Software and Data Integrity Failures",
+    "A09": "Security Logging and Monitoring Failures",
+    "A10": "Server-Side Request Forgery"
+  },
+  "cwe_references": {
+    "CWE-22": "Path Traversal",
+    "CWE-78": "OS Command Injection",
+    "CWE-79": "Cross-site Scripting (XSS)",
+    "CWE-89": "SQL Injection",
+    "CWE-94": "Code Injection",
+    "CWE-200": "Exposure of Sensitive Information",
+    "CWE-209": "Error Message Exposes Internal Details",
+    "CWE-287": "Improper Authentication",
+    "CWE-306": "Missing Authentication for Critical Function",
+    "CWE-312": "Cleartext Storage of Sensitive Information",
+    "CWE-352": "Cross-Site Request Forgery",
+    "CWE-434": "Unrestricted Upload of File with Dangerous Type",
+    "CWE-502": "Deserialization of Untrusted Data",
+    "CWE-601": "URL Redirection to Untrusted Site",
+    "CWE-798": "Use of Hard-coded Credentials",
+    "CWE-942": "Permissive Cross-domain Policy"
+  }
+}

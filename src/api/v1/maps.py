@@ -1,7 +1,8 @@
 import math
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List
+from src.middleware.auth import verify_firebase_token
 
 router = APIRouter()
 
@@ -11,7 +12,8 @@ class RouteSpot(BaseModel):
     longitude: float
 
 @router.post("/routes/optimize")
-async def optimize_route(spots: List[RouteSpot]):
+async def optimize_route(spots: List[RouteSpot], token: dict = Depends(verify_firebase_token)):
+
     if len(spots) <= 2:
         return spots
     

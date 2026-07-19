@@ -1,0 +1,65 @@
+name: Backend Security Review
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    name: Backend Security Scan & Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Node Dependencies
+        run: |
+          npm install xlsx exceljs --no-save
+          # Configure NODE_PATH to point to local node_modules
+          echo "NODE_PATH=$(pwd)/node_modules" >> $GITHUB_ENV
+
+      - name: Execute Security Scanner
+        run: |
+          node SecurityTest/scripts/generateSecuritySuite.js
+        working-directory: backend
+
+      - name: Check Zero-Critical Security Policy
+        run: |
+          CRITICAL_COUNT=$(node -e "const score = require('./backend/SecurityTest/reports/security-score.json'); console.log(score.distribution.critical || score.distribution.CRITICAL || 0);")
+          echo "Critical findings count: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "❌ Zero-Critical Security Policy Violation: Found $CRITICAL_COUNT Critical vulnerability findings."
+            exit 1
+          fi
+          echo "✅ Zero-Critical Security Policy Passed."
+
+      - name: Append Reports to Step Summary
+        if: always()
+        run: |
+          echo "### 📊 Executive Summary" >> $GITHUB_STEP_SUMMARY
+          cat backend/SecurityTest/reports/executive-summary.md >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🛡️ Detailed Security Findings" >> $GITHUB_STEP_SUMMARY
+          cat backend/SecurityTest/reports/security-review.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Security Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-security-reports
+          path: |
+            backend/SecurityTest/reports/findings.xlsx
+            backend/SecurityTest/reports/endpoint-inventory.md
+            backend/SecurityTest/reports/dependency-report.md
+            backend/SecurityTest/reports/security-review.md
+            backend/SecurityTest/reports/executive-summary.md
+            backend/SecurityTest/reports/security-score.json
+          retention-days: 30

@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from src.middleware.auth import verify_firebase_token
 
 router = APIRouter()
 
 @router.get("/safety")
-async def safety_score(city: str = Query(..., description="City to score")):
+async def safety_score(city: str = Query(..., description="City to score"), token: dict = Depends(verify_firebase_token)):
+
     hash_val = len(city) % 3
     return {
         "city": city,
