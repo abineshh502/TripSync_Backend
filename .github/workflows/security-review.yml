@@ -30,11 +30,10 @@ jobs:
       - name: Execute Security Scanner
         run: |
           node SecurityTest/scripts/generateSecuritySuite.js
-        working-directory: backend
 
       - name: Check Zero-Critical Security Policy
         run: |
-          CRITICAL_COUNT=$(node -e "const score = require('./backend/SecurityTest/reports/security-score.json'); console.log(score.distribution.critical || score.distribution.CRITICAL || 0);")
+          CRITICAL_COUNT=$(node -e "const score = require('./SecurityTest/reports/security-score.json'); console.log(score.distribution.critical || score.distribution.CRITICAL || 0);")
           echo "Critical findings count: $CRITICAL_COUNT"
           if [ "$CRITICAL_COUNT" -gt 0 ]; then
             echo "❌ Zero-Critical Security Policy Violation: Found $CRITICAL_COUNT Critical vulnerability findings."
@@ -46,20 +45,20 @@ jobs:
         if: always()
         run: |
           echo "### 📊 Executive Summary" >> $GITHUB_STEP_SUMMARY
-          cat backend/SecurityTest/reports/executive-summary.md >> $GITHUB_STEP_SUMMARY
+          cat SecurityTest/reports/executive-summary.md >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🛡️ Detailed Security Findings" >> $GITHUB_STEP_SUMMARY
-          cat backend/SecurityTest/reports/security-review.md >> $GITHUB_STEP_SUMMARY
+          cat SecurityTest/reports/security-review.md >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4
         with:
           name: backend-security-reports
           path: |
-            backend/SecurityTest/reports/findings.xlsx
-            backend/SecurityTest/reports/endpoint-inventory.md
-            backend/SecurityTest/reports/dependency-report.md
-            backend/SecurityTest/reports/security-review.md
-            backend/SecurityTest/reports/executive-summary.md
-            backend/SecurityTest/reports/security-score.json
+            SecurityTest/reports/findings.xlsx
+            SecurityTest/reports/endpoint-inventory.md
+            SecurityTest/reports/dependency-report.md
+            SecurityTest/reports/security-review.md
+            SecurityTest/reports/executive-summary.md
+            SecurityTest/reports/security-score.json
           retention-days: 30
