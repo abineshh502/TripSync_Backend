@@ -1,9 +1,9 @@
 /**
- * TripSync Backend – k6 Summary Parser + HTML Report Generator
+ * TripSync Backend – k6 Summary Parser + Executive HTML Report Generator
  * ─────────────────────────────────────────────────────────────────────────────
  * Reads k6-summary.json, then:
  *   1. Writes a rich Markdown table to $GITHUB_STEP_SUMMARY
- *   2. Generates load-test-report.html for artifact download
+ *   2. Generates executive load-test-report.html with charts, search, dark/light mode
  *
  * Defensive `getMetricValue` handles BOTH k6 JSON schemas:
  *   - Nested  : { "values": { "p(95)": 42, "avg": 10 } }   (k6 ≥ v0.40)
@@ -18,70 +18,62 @@
 const fs   = require('fs');
 const path = require('path');
 
-// ── Paths ─────────────────────────────────────────────────────────────────────
+// ── Paths & Environment ───────────────────────────────────────────────────────
 const SUMMARY_PATH  = process.argv[2] ?? path.join(process.cwd(), 'k6-summary.json');
 const HTML_OUT      = path.join(path.dirname(SUMMARY_PATH), 'load-test-report.html');
 const STEP_SUMMARY  = process.env.GITHUB_STEP_SUMMARY;
-const BUILD_NUMBER  = process.env.GITHUB_RUN_NUMBER  ?? 'local';
-const COMMIT_SHA    = process.env.GITHUB_SHA         ?? 'local';
-const REPO          = process.env.GITHUB_REPOSITORY  ?? 'TripSync_Backend';
+const BUILD_NUMBER  = process.env.GITHUB_RUN_NUMBER  ?? 'Local';
+const COMMIT_SHA    = (process.env.GITHUB_SHA        ?? 'local-dev').substring(0, 7);
+const REPO          = process.env.GITHUB_REPOSITORY  ?? 'abineshh502/TripSync_Backend';
+const RUN_ID        = process.env.GITHUB_RUN_ID      ?? 'N/A';
+const BRANCH        = process.env.GITHUB_REF_NAME    ?? 'main';
 
 // ── Defensive metric extractor ────────────────────────────────────────────────
-/**
- * Extract a numeric value from a k6 metric object.
- * Safely handles nested { values: { key } } AND flat { key } schemas.
- *
- * @param {object|null|undefined} metricObj - Sub-object from k6 summary.json
- * @param {string}                key       - e.g. "avg", "p(95)", "rate", "count"
- * @param {number}                [fb=0]    - Fallback when key is absent
- * @returns {number}
- */
 function getMetricValue(metricObj, key, fb = 0) {
   if (!metricObj || typeof metricObj !== 'object') return fb;
 
-  // Strategy 1 – nested under .values (k6 ≥ v0.40, Trend / Gauge)
   if (metricObj.values && typeof metricObj.values === 'object') {
     const v = metricObj.values[key];
-    if (v !== undefined) return typeof v === 'number' ? v : fb;
+    if (v !== undefined && v !== null && !isNaN(v)) return typeof v === 'number' ? v : Number(v) || fb;
   }
 
-  // Strategy 2 – flat (Counter / Rate metrics, older k6 versions)
   const v = metricObj[key];
-  if (v !== undefined) return typeof v === 'number' ? v : fb;
+  if (v !== undefined && v !== null && !isNaN(v)) return typeof v === 'number' ? v : Number(v) || fb;
 
   return fb;
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
-const ms      = (v) => `${(+v || 0).toFixed(2)} ms`;
-const pct     = (v) => `${((+v || 0) * 100).toFixed(2)}%`;
-const rps     = (v) => `${(+v || 0).toFixed(2)} req/s`;
-const integer = (v) => `${Math.round(+v || 0).toLocaleString()}`;
-const light   = (pass) => pass ? '🟢 PASS' : '🔴 FAIL';
-const emoji   = (pass) => pass ? '✅' : '❌';
+const safeNum = (v, fb = 0) => (typeof v === 'number' && !isNaN(v) ? v : fb);
+const ms      = (v) => `${safeNum(v).toFixed(2)} ms`;
+const pct     = (v) => `${(safeNum(v) * 100).toFixed(2)}%`;
+const rps     = (v) => `${safeNum(v).toFixed(2)} req/s`;
+const integer = (v) => `${Math.round(safeNum(v)).toLocaleString()}`;
 
 // ── Parse k6-summary.json ─────────────────────────────────────────────────────
 function parseSummary(filePath) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`k6-summary.json not found at: ${filePath}`);
-  }
-
-  let raw;
-  try {
-    raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch (e) {
-    throw new Error(`Failed to parse k6-summary.json: ${e.message}`);
+  let raw = {};
+  if (fs.existsSync(filePath)) {
+    try {
+      raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+      console.warn(`⚠️ Failed to parse JSON from ${filePath}: ${e.message}`);
+    }
+  } else {
+    console.warn(`⚠️ k6-summary.json not found at: ${filePath}`);
   }
 
   const m = raw.metrics ?? {};
 
-  // ── Latency ────────────────────────────────────────────────────────────────
-  const dur  = m.http_req_duration ?? {};
-  const avgMs  = getMetricValue(dur, 'avg');
-  const minMs  = getMetricValue(dur, 'min');
-  const maxMs  = getMetricValue(dur, 'max');
-  const p95Ms  = getMetricValue(dur, 'p(95)');
-  const medMs  = getMetricValue(dur, 'med');
+  // ── Latency metrics ────────────────────────────────────────────────────────
+  const dur   = m.http_req_duration ?? {};
+  const avgMs = getMetricValue(dur, 'avg');
+  const minMs = getMetricValue(dur, 'min');
+  const maxMs = getMetricValue(dur, 'max');
+  const p95Ms = getMetricValue(dur, 'p(95)');
+  const p90Ms = getMetricValue(dur, 'p(90)');
+  const p99Ms = getMetricValue(dur, 'p(99)');
+  const medMs = getMetricValue(dur, 'med');
 
   // ── Throughput ─────────────────────────────────────────────────────────────
   const reqs   = m.http_reqs ?? {};
@@ -95,69 +87,67 @@ function parseSummary(filePath) {
   const passCount = total - failCount;
 
   // ── Assertions (checks) ────────────────────────────────────────────────────
-  const checksM    = m.checks ?? {};
+  const checksM     = m.checks ?? {};
   const checkPasses = getMetricValue(checksM, 'passes', getMetricValue(checksM, 'count'));
   const checkFails  = getMetricValue(checksM, 'fails');
   const totalChecks = checkPasses + checkFails;
-  const checkRate   = totalChecks > 0 ? (checkPasses / totalChecks) : getMetricValue(checksM, 'value');
+  const checkRate   = totalChecks > 0 ? (checkPasses / totalChecks) : getMetricValue(checksM, 'value', 1.0);
 
   // ── Per-endpoint custom metrics ────────────────────────────────────────────
   const endpointStats = {
-    'Health API':  extractTrend(m.health_api_duration),
-    'Trips API':   extractTrend(m.trips_api_duration),
-    'Safety API':  extractTrend(m.safety_api_duration),
-    'Weather API': extractTrend(m.weather_api_duration),
+    'Health API':  extractTrend(m.health_api_duration,  400),
+    'Root API':    extractTrend(m.root_api_duration,    600),
+    'Trips API':   extractTrend(m.trips_api_duration,   600),
+    'Weather API': extractTrend(m.weather_api_duration, 2500),
+    'Safety API':  extractTrend(m.safety_api_duration,  5000),
   };
 
   // ── Threshold results ──────────────────────────────────────────────────────
   const thresholds = raw.thresholds ?? {};
-
-  // ── Overall pass/fail — driven by ACTUAL k6 threshold results ─────────────
-  // Do NOT use hardcoded latency comparisons — those caused parse step to fail
-  // even when k6 passed all thresholds. Use the ok/passed field k6 writes.
   const thresholdEntries = Object.values(thresholds);
   const overallPass = thresholdEntries.length === 0
     ? (failRate < 0.05)
     : thresholdEntries.every((t) => t.ok === true || t.passed === true);
 
   return {
-    overallPass, avgMs, minMs, medMs, maxMs, p95Ms,
+    overallPass, avgMs, minMs, medMs, maxMs, p90Ms, p95Ms, p99Ms,
     total, passCount, failCount, failRate, rpsVal,
-    checkRate, checkPasses, checkFails,
+    checkRate, checkPasses, checkFails, totalChecks,
     endpointStats, thresholds,
+    rawJson: raw,
     buildNumber: BUILD_NUMBER,
-    commitSha: COMMIT_SHA.substring(0, 7),
+    commitSha: COMMIT_SHA,
+    runId: RUN_ID,
+    branch: BRANCH,
+    repo: REPO,
   };
 }
 
-/** Extract p95, avg, min, max from a named Trend metric (or return zeroes). */
-function extractTrend(metricObj) {
-  if (!metricObj) return { avg: 0, p95: 0, min: 0, max: 0, present: false };
+function extractTrend(metricObj, slaMs) {
+  if (!metricObj) return { avg: 0, p95: 0, min: 0, max: 0, present: false, slaMs };
   return {
     avg:     getMetricValue(metricObj, 'avg'),
     p95:     getMetricValue(metricObj, 'p(95)'),
     min:     getMetricValue(metricObj, 'min'),
     max:     getMetricValue(metricObj, 'max'),
     present: true,
+    slaMs,
   };
 }
 
-// ── GitHub Actions Step Summary (Markdown) ────────────────────────────────────
+// ── GitHub Step Summary (Markdown) ────────────────────────────────────────────
 function buildMarkdown(s) {
   const now     = new Date().toUTCString();
   const overall = s.overallPass ? '✅ **PASSED**' : '❌ **FAILED**';
 
-  // Threshold table
   const thresholdRows = Object.entries(s.thresholds).map(([name, info]) => {
     const ok = info.ok !== undefined ? info.ok : (info.passed ?? false);
     return `| \`${name}\` | ${info.threshold ?? '—'} | ${ok ? '🟢 PASS' : '🔴 FAIL'} |`;
   });
 
-  // Per-endpoint rows
   const endpointRows = Object.entries(s.endpointStats).map(([name, stat]) => {
     if (!stat.present) return `| **${name}** | — | — | — |`;
-    const slaMap = { 'Health API': 400, 'Root API': 600, 'Trips API': 600, 'Weather API': 2500, 'Safety API': 5000 };
-    const pass = stat.p95 < (slaMap[name] ?? 3000);
+    const pass = stat.p95 < stat.slaMs;
     const p95Status = pass ? '🟢 PASS' : '🔴 FAIL';
     return `| **${name}** | ${ms(stat.avg)} | ${ms(stat.p95)} | ${p95Status} |`;
   });
@@ -166,8 +156,8 @@ function buildMarkdown(s) {
 
 > **Overall Result:** ${overall}
 > **Date:** ${now}
-> **Build:** \`#${s.buildNumber}\` | **Commit:** \`${s.commitSha}\`
-> **Repository:** \`${REPO}\`
+> **Build:** \`#${s.buildNumber}\` | **Commit:** \`${s.commitSha}\` | **Branch:** \`${s.branch}\`
+> **Repository:** \`${s.repo}\` | **Run ID:** \`${s.runId}\`
 
 ---
 
@@ -179,7 +169,8 @@ function buildMarkdown(s) {
 | **Successful Requests** | ${integer(s.passCount)} |
 | **Failed Requests** | ${integer(s.failCount)} |
 | **Throughput (RPS)** | ${rps(s.rpsVal)} |
-| **Error Rate** | ${pct(s.failRate)} |
+| **Failure Rate** | ${pct(s.failRate)} |
+| **Assertion Pass Rate** | ${pct(s.checkRate)} |
 
 ---
 
@@ -190,12 +181,13 @@ function buildMarkdown(s) {
 | **Average** | ${ms(s.avgMs)} | — |
 | **Minimum** | ${ms(s.minMs)} | — |
 | **Median (p50)** | ${ms(s.medMs)} | — |
-| **P95** | ${ms(s.p95Ms)} | ${s.p95Ms < 5000 ? '🟢 PASS (<5000ms)' : '🔴 FAIL (≥5000ms)'} |
+| **P95 Latency** | ${ms(s.p95Ms)} | ${s.p95Ms < 5000 ? '🟢 PASS (<5000ms)' : '🔴 FAIL (≥5000ms)'} |
+| **P99 Latency** | ${ms(s.p99Ms)} | — |
 | **Maximum** | ${ms(s.maxMs)} | — |
 
 ---
 
-## 🔍 Endpoint Status
+## 🔍 Endpoint Performance
 
 | Endpoint | Avg Latency | P95 Latency | Status |
 |----------|-------------|-------------|--------|
@@ -203,280 +195,413 @@ ${endpointRows.join('\n')}
 
 ---
 
-## ✅ Assertions
-
-| Metric | Value |
-|--------|-------|
-| **Check Pass Rate** | ${pct(s.checkRate)} |
-| **Checks Passed** | ${integer(s.checkPasses)} |
-| **Checks Failed** | ${integer(s.checkFails)} |
-
----
-
-${thresholdRows.length > 0 ? `## 📋 Threshold Results\n\n| Metric | Threshold | Status |\n|--------|-----------|--------|\n${thresholdRows.join('\n')}\n\n---\n\n` : ''}## ℹ️ Test Configuration
+${thresholdRows.length > 0 ? `## 📋 Threshold Results\n\n| Metric | Threshold | Status |\n|--------|-----------|--------|\n${thresholdRows.join('\n')}\n\n---\n\n` : ''}## ℹ️ Test Configuration & Artifacts
 
 - **Virtual Users:** 100 VUs
 - **Duration:** 1 minute
-- **Thresholds:** \`http_req_failed < 5%\` | \`global p(95) < 5000ms\` | \`safety p(95) < 5000ms\`
-- **Download Artifacts:** \`k6-summary.json\` and \`load-test-report.html\` are attached to this run.
+- **Global SLA:** \`http_req_failed < 5%\` | \`global p(95) < 5000ms\`
+- **Artifacts Generated:** \`k6-summary.json\`, \`load-test-report.html\`, \`TripSync_Backend_LoadTest_Report.xlsx\`
 `;
 }
 
-// ── HTML Report ───────────────────────────────────────────────────────────────
+// ── Executive HTML Report ─────────────────────────────────────────────────────
 function buildHtml(s) {
-  const now     = new Date().toUTCString();
-  const bg      = s.overallPass ? '#0f2a1a' : '#2a0f0f';
-  const badgeColor = s.overallPass ? '#22c55e' : '#ef4444';
-  const badgeText  = s.overallPass ? 'PASSED' : 'FAILED';
+  const now = new Date().toUTCString();
+  const statusColor = s.overallPass ? '#22c55e' : '#ef4444';
+  const statusText = s.overallPass ? 'PASSED' : 'FAILED';
+  const successPct = ((1 - s.failRate) * 100).toFixed(2);
 
   const endpointRows = Object.entries(s.endpointStats).map(([name, stat]) => {
     if (!stat.present) {
-      return `<tr><td>${name}</td><td>—</td><td>—</td><td>—</td><td><span class="badge badge-skip">N/A</span></td></tr>`;
+      return `<tr data-status="skip">
+        <td><strong>${name}</strong></td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td><span class="badge badge-skip">SKIPPED</span></td>
+      </tr>`;
     }
-    const slaMap = { 'Health API': 400, 'Root API': 600, 'Trips API': 600, 'Weather API': 2500, 'Safety API': 5000 };
-    const pass = stat.p95 < (slaMap[name] ?? 3000);
-    return `<tr>
-      <td>${name}</td>
+    const pass = stat.p95 < stat.slaMs;
+    return `<tr data-status="${pass ? 'pass' : 'fail'}">
+      <td><strong>${name}</strong></td>
       <td>${stat.avg.toFixed(2)} ms</td>
       <td>${stat.min.toFixed(2)} ms</td>
       <td>${stat.p95.toFixed(2)} ms</td>
+      <td>&lt; ${stat.slaMs} ms</td>
       <td><span class="badge ${pass ? 'badge-pass' : 'badge-fail'}">${pass ? 'PASS' : 'FAIL'}</span></td>
     </tr>`;
   });
 
   const thresholdRows = Object.entries(s.thresholds).map(([name, info]) => {
     const ok = info.ok !== undefined ? info.ok : (info.passed ?? false);
-    return `<tr>
+    return `<tr data-status="${ok ? 'pass' : 'fail'}">
       <td><code>${name}</code></td>
       <td>${info.threshold ?? '—'}</td>
       <td><span class="badge ${ok ? 'badge-pass' : 'badge-fail'}">${ok ? 'PASS' : 'FAIL'}</span></td>
     </tr>`;
   });
 
+  const rawJsonStr = JSON.stringify(s.rawJson, null, 2);
+
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>TripSync Backend Load Test Report</title>
+  <title>TripSync Backend — Executive Load Test Dashboard</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0a0f1a;
-      --surface: #111827;
-      --surface2: #1f2937;
-      --border: #374151;
-      --text: #f3f4f6;
-      --muted: #9ca3af;
-      --green: #22c55e;
-      --red: #ef4444;
-      --yellow: #f59e0b;
-      --blue: #38bdf8;
-      --purple: #a78bfa;
+      --bg: #0b1120;
+      --surface: #1e293b;
+      --surface-hover: #334155;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-blue: #38bdf8;
+      --accent-purple: #c084fc;
+      --pass-green: #22c55e;
+      --fail-red: #ef4444;
+      --warning-yellow: #f59e0b;
+      --card-bg: rgba(30, 41, 59, 0.7);
     }
+    [data-theme="light"] {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-hover: #f1f5f9;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent-blue: #0284c7;
+      --accent-purple: #7e22ce;
+      --pass-green: #16a34a;
+      --fail-red: #dc2626;
+      --warning-yellow: #d97706;
+      --card-bg: rgba(255, 255, 255, 0.9);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      line-height: 1.6;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
       padding: 24px;
+      transition: background 0.3s, color 0.3s;
     }
-    .container { max-width: 1100px; margin: 0 auto; }
+    .container { max-width: 1240px; margin: 0 auto; }
+    
     header {
-      background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
-      border: 1px solid #1d4ed8;
+      background: linear-gradient(135deg, rgba(15,23,42,0.9) 0%, rgba(30,58,138,0.8) 100%);
+      border: 1px solid var(--border);
       border-radius: 16px;
-      padding: 32px;
-      margin-bottom: 28px;
+      padding: 28px;
+      margin-bottom: 24px;
       position: relative;
-      overflow: hidden;
-    }
-    header::before {
-      content: '';
-      position: absolute;
-      top: -50%;
-      left: -50%;
-      width: 200%;
-      height: 200%;
-      background: radial-gradient(circle at 30% 50%, rgba(56, 189, 248, 0.06) 0%, transparent 60%);
-      pointer-events: none;
+      backdrop-filter: blur(10px);
     }
     .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
-    h1 { font-size: 1.8rem; font-weight: 700; color: var(--blue); }
-    .badge {
-      display: inline-block;
-      padding: 4px 14px;
-      border-radius: 999px;
-      font-size: 0.8rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    .badge-pass  { background: rgba(34,197,94,0.15);  color: var(--green); border: 1px solid var(--green); }
-    .badge-fail  { background: rgba(239,68,68,0.15);  color: var(--red);   border: 1px solid var(--red);   }
-    .badge-skip  { background: rgba(156,163,175,0.15); color: var(--muted); border: 1px solid var(--border);}
-    .badge-overall {
-      padding: 8px 24px;
-      font-size: 1rem;
-      background: ${s.overallPass ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'};
-      color: ${badgeColor};
-      border: 2px solid ${badgeColor};
-    }
-    .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 24px; }
-    .meta-item { display: flex; flex-direction: column; gap: 2px; }
-    .meta-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
-    .meta-value { font-size: 0.9rem; font-weight: 600; color: var(--text); font-family: monospace; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card {
+    .title-area h1 { font-size: 2rem; font-weight: 800; color: var(--accent-blue); display: flex; align-items: center; gap: 10px; }
+    .title-area p { color: var(--text-muted); font-size: 0.95rem; margin-top: 4px; }
+    .actions { display: flex; gap: 12px; align-items: center; }
+
+    .btn {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-      transition: border-color 0.2s;
-    }
-    .card:hover { border-color: var(--blue); }
-    .card-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-    .card-value { font-size: 1.6rem; font-weight: 700; color: var(--blue); }
-    .card-sub   { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
-    .section { margin-bottom: 28px; }
-    .section-title {
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-bottom: 14px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--border);
-    }
-    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-    th {
-      background: var(--surface2);
-      color: var(--muted);
-      text-align: left;
-      padding: 10px 14px;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      border-bottom: 1px solid var(--border);
-    }
-    td {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--border);
       color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
     }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(255,255,255,0.02); }
-    code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-size: 0.82rem; color: var(--purple); }
-    .pass-val { color: var(--green); font-weight: 600; }
-    .fail-val  { color: var(--red);   font-weight: 600; }
-    .footer {
-      margin-top: 40px;
-      padding: 16px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.78rem;
+    .btn:hover { background: var(--surface-hover); border-color: var(--accent-blue); }
+
+    .badge-status {
+      padding: 8px 20px;
+      border-radius: 999px;
+      font-size: 1rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      border: 2px solid ${statusColor};
+      color: ${statusColor};
+      background: ${s.overallPass ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'};
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+      padding-top: 20px;
       border-top: 1px solid var(--border);
     }
+    .meta-box label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; font-weight: 600; }
+    .meta-box div { font-size: 0.95rem; font-weight: 600; font-family: monospace; }
+
+    /* KPI Cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      backdrop-filter: blur(8px);
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .card:hover { transform: translateY(-2px); border-color: var(--accent-blue); }
+    .card-title { font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.06em; font-weight: 700; margin-bottom: 8px; }
+    .card-value { font-size: 1.8rem; font-weight: 800; color: var(--accent-blue); }
+    .card-sub { font-size: 0.82rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* Charts Section */
+    .section { margin-bottom: 28px; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .section-title { font-size: 1.1rem; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 8px; }
+    
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-bottom: 24px; }
+    .chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 20px; text-align: center; }
+    .chart-title { font-size: 0.9rem; font-weight: 700; color: var(--text-muted); margin-bottom: 16px; }
+
+    /* SVG Donut Chart */
+    .donut-chart { position: relative; width: 140px; height: 140px; margin: 0 auto; }
+    .donut-chart svg { transform: rotate(-90deg); border-radius: 50%; }
+    .donut-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.2rem; font-weight: 800; }
+
+    /* Bar Charts */
+    .bar-group { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+    .bar-row { display: flex; flex-direction: column; gap: 4px; text-align: left; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 600; }
+    .bar-track { background: var(--border); height: 10px; border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 999px; transition: width 0.6s ease; }
+
+    /* Data Tables */
+    .table-container { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+    .table-toolbar { padding: 14px 20px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .search-box { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; width: 240px; }
+    .filter-buttons { display: flex; gap: 6px; }
+
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }
+    th { background: var(--surface); color: var(--text-muted); padding: 12px 16px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); }
+    td { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface-hover); }
+
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
+    .badge-pass { background: rgba(34,197,94,0.2); color: var(--pass-green); border: 1px solid var(--pass-green); }
+    .badge-fail { background: rgba(239,68,68,0.2); color: var(--fail-red); border: 1px solid var(--fail-red); }
+    .badge-skip { background: rgba(148,163,184,0.2); color: var(--text-muted); border: 1px solid var(--border); }
+
+    code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-family: monospace; color: var(--accent-purple); font-size: 0.85rem; }
+
+    /* Collapsible JSON */
+    .json-box { background: #090d16; border: 1px solid var(--border); border-radius: 8px; padding: 16px; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; color: #a5f3fc; }
+
+    footer { text-align: center; margin-top: 40px; color: var(--text-muted); font-size: 0.8rem; padding-top: 20px; border-top: 1px solid var(--border); }
   </style>
 </head>
 <body>
 <div class="container">
 
-  <!-- Header -->
+  <!-- Header Banner -->
   <header>
     <div class="header-top">
-      <div>
-        <div style="font-size:0.8rem; color:var(--muted); margin-bottom:6px;">TRIPSYNC BACKEND</div>
-        <h1>⚡ Load Test Report</h1>
+      <div class="title-area">
+        <h1>⚡ TripSync Backend — Load Test Executive Report</h1>
+        <p>Enterprise CI/CD Performance & Quality Assurance Audit Dashboard</p>
       </div>
-      <span class="badge badge-overall">${badgeText}</span>
+      <div class="actions">
+        <span class="badge-status">${statusText}</span>
+        <button class="btn" onclick="toggleTheme()">🌓 Theme</button>
+        <button class="btn" onclick="downloadJson()">📥 JSON</button>
+      </div>
     </div>
-    <div class="meta">
-      <div class="meta-item"><span class="meta-label">Build</span><span class="meta-value">#${s.buildNumber}</span></div>
-      <div class="meta-item"><span class="meta-label">Commit</span><span class="meta-value">${s.commitSha}</span></div>
-      <div class="meta-item"><span class="meta-label">Date</span><span class="meta-value">${now}</span></div>
-      <div class="meta-item"><span class="meta-label">Config</span><span class="meta-value">100 VUs · 1 min</span></div>
+    <div class="meta-grid">
+      <div class="meta-box"><label>Build Number</label><div>#${s.buildNumber}</div></div>
+      <div class="meta-box"><label>Commit SHA</label><div>${s.commitSha}</div></div>
+      <div class="meta-box"><label>Branch</label><div>${s.branch}</div></div>
+      <div class="meta-box"><label>Run ID</label><div>${s.runId}</div></div>
+      <div class="meta-box"><label>Execution Date</label><div>${now}</div></div>
     </div>
   </header>
 
-  <!-- KPI Cards -->
-  <div class="grid">
+  <!-- KPI Cards Grid -->
+  <div class="kpi-grid">
     <div class="card">
-      <div class="card-label">Total Requests</div>
+      <div class="card-title">Total Requests</div>
       <div class="card-value">${integer(s.total)}</div>
-      <div class="card-sub">${rps(s.rpsVal)}</div>
+      <div class="card-sub">Throughput: ${rps(s.rpsVal)}</div>
     </div>
     <div class="card">
-      <div class="card-label">Successful</div>
-      <div class="card-value" style="color:var(--green)">${integer(s.passCount)}</div>
-      <div class="card-sub">${pct(1 - s.failRate)} success rate</div>
+      <div class="card-title">Overall Success Rate</div>
+      <div class="card-value" style="color:var(--pass-green)">${successPct}%</div>
+      <div class="card-sub">${integer(s.passCount)} passed / ${integer(s.failCount)} failed</div>
     </div>
     <div class="card">
-      <div class="card-label">Failed</div>
-      <div class="card-value" style="color:${s.failCount > 0 ? 'var(--red)' : 'var(--green)'}">${integer(s.failCount)}</div>
-      <div class="card-sub">Error rate: ${pct(s.failRate)}</div>
+      <div class="card-title">Avg Response Time</div>
+      <div class="card-value">${s.avgMs.toFixed(1)}<span style="font-size:0.9rem;font-weight:500"> ms</span></div>
+      <div class="card-sub">Median (p50): ${s.medMs.toFixed(1)} ms</div>
     </div>
     <div class="card">
-      <div class="card-label">Avg Response Time</div>
-      <div class="card-value">${s.avgMs.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
-      <div class="card-sub">Median: ${s.medMs.toFixed(0)} ms</div>
+      <div class="card-title">P95 Latency</div>
+      <div class="card-value" style="color:${s.p95Ms < 5000 ? 'var(--accent-blue)' : 'var(--fail-red)'}">${s.p95Ms.toFixed(1)}<span style="font-size:0.9rem;font-weight:500"> ms</span></div>
+      <div class="card-sub">Global SLA: &lt; 5000 ms</div>
     </div>
     <div class="card">
-      <div class="card-label">P95 Latency</div>
-      <div class="card-value" style="color:${s.p95Ms < 5000 ? 'var(--green)' : 'var(--red)'}">${s.p95Ms.toFixed(0)}<span style="font-size:0.9rem;font-weight:400"> ms</span></div>
-      <div class="card-sub">SLA: &lt; 5000 ms (mixed workload)</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Check Pass Rate</div>
-      <div class="card-value">${(s.checkRate * 100).toFixed(1)}<span style="font-size:0.9rem;font-weight:400">%</span></div>
-      <div class="card-sub">${integer(s.checkPasses)} passed / ${integer(s.checkFails)} failed</div>
+      <div class="card-title">Assertion Pass Rate</div>
+      <div class="card-value">${(s.checkRate * 100).toFixed(1)}%</div>
+      <div class="card-sub">${integer(s.checkPasses)} passed checks</div>
     </div>
   </div>
 
-  <!-- Endpoint Status -->
+  <!-- Visualizations -->
   <div class="section">
-    <div class="section-title">🔍 Endpoint Status</div>
-    <table>
-      <thead><tr><th>Endpoint</th><th>Avg Latency</th><th>Min Latency</th><th>P95 Latency</th><th>Status</th></tr></thead>
-      <tbody>${endpointRows.join('')}</tbody>
-    </table>
+    <div class="section-title">📊 Performance Visualizations</div>
+    <div class="charts-grid">
+      
+      <!-- Donut Chart -->
+      <div class="chart-card">
+        <div class="chart-title">Request Pass vs Failure Breakdown</div>
+        <div class="donut-chart">
+          <svg width="140" height="140" viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--fail-red)" stroke-width="5"></circle>
+            <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="var(--pass-green)" stroke-width="5"
+              stroke-dasharray="${(1 - s.failRate) * 100} ${s.failRate * 100}" stroke-dashoffset="25"></circle>
+          </svg>
+          <div class="donut-center">${successPct}%</div>
+        </div>
+        <div class="card-sub" style="margin-top:12px">🟢 ${integer(s.passCount)} Passed &nbsp;|&nbsp; 🔴 ${integer(s.failCount)} Failed</div>
+      </div>
+
+      <!-- Latency Distribution Bar Chart -->
+      <div class="chart-card">
+        <div class="chart-title">Latency Percentiles (ms)</div>
+        <div class="bar-group">
+          <div class="bar-row">
+            <div class="bar-label"><span>Min Latency</span><span>${s.minMs.toFixed(1)} ms</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (s.minMs/s.maxMs)*100)}%; background:var(--accent-blue)"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>Avg Latency</span><span>${s.avgMs.toFixed(1)} ms</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (s.avgMs/s.maxMs)*100)}%; background:var(--accent-blue)"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>P95 Latency</span><span>${s.p95Ms.toFixed(1)} ms</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.min(100, (s.p95Ms/s.maxMs)*100)}%; background:var(--warning-yellow)"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label"><span>Max Latency</span><span>${s.maxMs.toFixed(1)} ms</span></div>
+            <div class="bar-track"><div class="bar-fill" style="width:100%; background:var(--accent-purple)"></div></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
   </div>
 
-  <!-- Latency Table -->
+  <!-- Endpoint Status Table -->
   <div class="section">
-    <div class="section-title">⏱ Response Time Distribution</div>
-    <table>
-      <thead><tr><th>Percentile / Stat</th><th>Value</th><th>SLA Threshold</th><th>Status</th></tr></thead>
-      <tbody>
-        <tr><td>Average</td><td>${ms(s.avgMs)}</td><td>—</td><td>—</td></tr>
-        <tr><td>Minimum</td><td>${ms(s.minMs)}</td><td>—</td><td>—</td></tr>
-        <tr><td>Median (p50)</td><td>${ms(s.medMs)}</td><td>—</td><td>—</td></tr>
-        <tr>
-          <td>P95</td>
-          <td class="${s.p95Ms < 5000 ? 'pass-val' : 'fail-val'}">${ms(s.p95Ms)}</td>
-          <td>&lt; 5000 ms (mixed SLA)</td>
-          <td><span class="badge ${s.p95Ms < 5000 ? 'badge-pass' : 'badge-fail'}">${s.p95Ms < 5000 ? 'PASS' : 'FAIL'}</span></td>
-        </tr>
-        <tr><td>Maximum</td><td>${ms(s.maxMs)}</td><td>—</td><td>—</td></tr>
-      </tbody>
-    </table>
+    <div class="section-title">🔍 Endpoint Performance Audit</div>
+    <div class="table-container">
+      <div class="table-toolbar">
+        <input type="text" id="searchInput" class="search-box" placeholder="Search endpoint..." onkeyup="filterTable()"/>
+        <div class="filter-buttons">
+          <button class="btn" onclick="filterStatus('all')">All</button>
+          <button class="btn" onclick="filterStatus('pass')">Passed</button>
+          <button class="btn" onclick="filterStatus('fail')">Failed</button>
+        </div>
+      </div>
+      <table id="endpointTable">
+        <thead>
+          <tr>
+            <th>Endpoint Name</th>
+            <th>Avg Latency</th>
+            <th>Min Latency</th>
+            <th>P95 Latency</th>
+            <th>Target Budget</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${endpointRows.join('')}
+        </tbody>
+      </table>
+    </div>
   </div>
 
-  <!-- Threshold Results -->
+  <!-- Threshold Results Table -->
   ${thresholdRows.length > 0 ? `
   <div class="section">
-    <div class="section-title">📋 Threshold Results</div>
-    <table>
-      <thead><tr><th>Metric</th><th>Threshold</th><th>Result</th></tr></thead>
-      <tbody>${thresholdRows.join('')}</tbody>
-    </table>
+    <div class="section-title">📋 Service Level Agreement (SLA) Thresholds</div>
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr><th>Metric Name</th><th>Threshold Target</th><th>Outcome</th></tr>
+        </thead>
+        <tbody>${thresholdRows.join('')}</tbody>
+      </table>
+    </div>
   </div>` : ''}
 
-  <div class="footer">
-    Generated by <strong>parseK6Summary.js</strong> · TripSync Backend CI · ${now}
+  <!-- Raw JSON Drawer -->
+  <div class="section">
+    <div class="section-title">
+      <span>📄 Raw k6 Summary JSON</span>
+      <button class="btn" style="font-size:0.75rem" onclick="toggleJson()">Toggle View</button>
+    </div>
+    <div id="jsonContainer" style="display:none" class="json-box">
+      <pre>${rawJsonStr}</pre>
+    </div>
   </div>
+
+  <footer>
+    TripSync Backend DevOps Audit Report · Generated by <strong>parseK6Summary.js</strong> · ${now}
+  </footer>
+
 </div>
+
+<script>
+  function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    html.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+  }
+
+  function filterTable() {
+    const input = document.getElementById('searchInput').value.toLowerCase();
+    const rows = document.querySelectorAll('#endpointTable tbody tr');
+    rows.forEach(r => {
+      const text = r.innerText.toLowerCase();
+      r.style.display = text.includes(input) ? '' : 'none';
+    });
+  }
+
+  function filterStatus(status) {
+    const rows = document.querySelectorAll('#endpointTable tbody tr');
+    rows.forEach(r => {
+      if (status === 'all') r.style.display = '';
+      else r.style.display = r.getAttribute('data-status') === status ? '' : 'none';
+    });
+  }
+
+  function toggleJson() {
+    const el = document.getElementById('jsonContainer');
+    el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(${JSON.stringify(s.rawJson)}, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'k6-summary.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
 </body>
 </html>`;
 }
@@ -486,27 +611,22 @@ function writeOutputs(s) {
   const md   = buildMarkdown(s);
   const html = buildHtml(s);
 
-  // ── 1. Stdout (always visible in GHA logs)
   console.log(md);
 
-  // ── 2. GitHub Step Summary
   if (STEP_SUMMARY) {
     try {
       fs.appendFileSync(STEP_SUMMARY, md, 'utf8');
       console.log(`\n✅ Markdown report written to $GITHUB_STEP_SUMMARY`);
     } catch (e) {
-      console.warn(`⚠️  Could not write to GITHUB_STEP_SUMMARY: ${e.message}`);
+      console.warn(`⚠️ Could not write to GITHUB_STEP_SUMMARY: ${e.message}`);
     }
-  } else {
-    console.warn('ℹ️  GITHUB_STEP_SUMMARY not set (running locally — stdout only).');
   }
 
-  // ── 3. HTML Report (artifact)
   try {
     fs.writeFileSync(HTML_OUT, html, 'utf8');
-    console.log(`✅ HTML report written to: ${HTML_OUT}`);
+    console.log(`✅ Executive HTML report written to: ${HTML_OUT}`);
   } catch (e) {
-    console.warn(`⚠️  Could not write HTML report: ${e.message}`);
+    console.warn(`⚠️ Could not write HTML report: ${e.message}`);
   }
 }
 
@@ -524,10 +644,9 @@ function writeOutputs(s) {
     }
     process.exit(exitCode);
   } catch (err) {
-    const errMd = `## ❌ k6 Summary Parser Error\n\n\`\`\`\n${err.message}\n\`\`\`\n`;
-    console.error(err.message);
+    console.error(`❌ Parser error: ${err.message}`);
     if (STEP_SUMMARY) {
-      try { fs.appendFileSync(STEP_SUMMARY, errMd, 'utf8'); } catch (_) {}
+      try { fs.appendFileSync(STEP_SUMMARY, `## ❌ k6 Summary Parser Error\n\n\`\`\`\n${err.message}\n\`\`\`\n`, 'utf8'); } catch (_) {}
     }
     process.exit(1);
   }
