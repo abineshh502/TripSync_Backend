@@ -158,6 +158,14 @@ jobs:
             fi
           fi
 
+      # ── 6.5 Run 500+ Automated Test Cases Suite ────────────────────────────────
+      - name: Run Enterprise 500+ Automated Test Suite
+        env:
+          BACKEND_URL: ${{ steps.resolve_url.outputs.TARGET_URL }}
+        run: |
+          echo "🧪 Running 500+ Automated Test Cases Suite..."
+          node scripts/run_automated_tests.js "$BACKEND_URL"
+
       # ── 7. Run k6 Load Test ───────────────────────────────────────────────────
       - name: Run k6 Load Test
         id: k6_run
@@ -192,7 +200,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           if [ -f k6-summary.json ]; then
-            echo "📊 Parsing k6-summary.json ..."
+            echo "📊 Parsing k6-summary.json and test-results.json ..."
             node scripts/parseK6Summary.js k6-summary.json
           else
             echo "⚠️  k6-summary.json not found — k6 may have crashed before completing."
@@ -214,7 +222,15 @@ jobs:
             echo "⚠️  Missing k6 result files, skipping Excel generation."
           fi
 
-      # ── 9. Upload k6-summary.json artifact ────────────────────────────────────
+      # ── 9. Upload test-results.json & k6-summary.json artifacts ──────────────
+      - name: Upload Test Results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-json
+          path: test-results.json
+          retention-days: 30
+
       - name: Upload k6 Summary JSON
         if: always()
         uses: actions/upload-artifact@v4
