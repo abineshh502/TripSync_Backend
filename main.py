@@ -283,12 +283,25 @@ async def validate_audio_file(file: UploadFile) -> bytes:
 async def lifespan(app: FastAPI):
     """
     Application lifespan handler — startup validation.
-    In production: fails fast if Firebase Admin is not configured.
-    In development: warns but continues (protected endpoints still enforce auth).
+    Logs critical warnings for missing Firebase credentials but does NOT crash
+    the process — the app starts and serves public endpoints (/, /health).
+    Protected endpoints enforce auth via verify_firebase_token (returns 401
+    if Firebase Admin is unavailable).
     """
-    enforce_startup_requirements()          # fail-closed startup gate
+    # Non-fatal startup check: log warnings/errors but never raise
+    try:
+        enforce_startup_requirements()
+    except RuntimeError as exc:
+        logger.critical(
+            "[STARTUP] Firebase Admin unavailable: %s — "
+            "Public endpoints will work; protected endpoints will return 401.",
+            exc,
+        )
     from src.core.config import settings
-    settings.validate_for_startup()        # config validation
+    try:
+        settings.validate_for_startup()    # config validation (non-fatal)
+    except RuntimeError as exc:
+        logger.critical("[STARTUP] Config validation failed: %s", exc)
     logger.info(
         "[STARTUP] TripSync Core Backend started | env=%s | cors=%s",
         os.environ.get("APP_ENV", "development"),
@@ -298,14 +311,21 @@ async def lifespan(app: FastAPI):
     logger.info("[SHUTDOWN] TripSync Core Backend shutting down")
 
 
+# ─── Docs URL Control ─────────────────────────────────────────────────────────
+# Set ENABLE_DOCS=true in Railway environment variables to expose /docs and /redoc.
+# This is independent of APP_ENV so production deployments can optionally expose docs.
+_ENABLE_DOCS = os.environ.get("ENABLE_DOCS", "").lower() in ("1", "true", "yes")
+_APP_IS_DEV = os.environ.get("APP_ENV", "development").lower() == "development"
+_SHOW_DOCS = _ENABLE_DOCS or _APP_IS_DEV
+
 app = FastAPI(
     title="TripSync Core AI Backend Service",
     description="Scalable async FastAPI backend for AI Chatbot, travel safety, TSP route solver & more.",
     version="2.0.0",
-    # Disable interactive docs in production (security hardening)
-    docs_url="/docs" if os.environ.get("APP_ENV", "development") == "development" else None,
-    redoc_url="/redoc" if os.environ.get("APP_ENV", "development") == "development" else None,
-    openapi_url="/openapi.json" if os.environ.get("APP_ENV", "development") == "development" else None,
+    # Docs are shown in development OR when ENABLE_DOCS=true is set explicitly
+    docs_url="/docs" if _SHOW_DOCS else None,
+    redoc_url="/redoc" if _SHOW_DOCS else None,
+    openapi_url="/openapi.json" if _SHOW_DOCS else None,
     lifespan=lifespan,
 )
 
