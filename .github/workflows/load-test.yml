@@ -108,9 +108,9 @@ jobs:
         run: |
           INPUT_URL="${{ github.event.inputs.backend_url }}"
           SECRET_URL="${{ secrets.BACKEND_URL }}"
-          RAILWAY_URL="https://tripsyncbackend-production-37a2.up.railway.app"
+          RAILWAY_URL="https://tripsyncbackend-production-0364.up.railway.app"
 
-          if [ -n "$INPUT_URL" ] && [ "$INPUT_URL" != "https://tripsyncbackend-production-37a2.up.railway.app" ]; then
+          if [ -n "$INPUT_URL" ] && [ "$INPUT_URL" != "https://tripsyncbackend-production-0364.up.railway.app" ]; then
             # A custom URL was explicitly entered in the Run Workflow dialog
             TARGET_URL="$INPUT_URL"
             echo "📌 Source: workflow_dispatch custom input"

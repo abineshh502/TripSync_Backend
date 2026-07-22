@@ -1,7 +1,7 @@
 /**
  * TripSync Backend — k6 Category-wise Load Test Suite v5.0
  * ─────────────────────────────────────────────────────────────────────────────
- * Production target : https://tripsyncbackend-production-37a2.up.railway.app
+ * Production target : https://tripsyncbackend-production-0364.up.railway.app
  *
  * Categorized API Test Groups:
  *   1. Authentication API  : POST /api/otp/send
@@ -46,7 +46,7 @@ export const options = {
 };
 
 // ── Target URL & Headers ──────────────────────────────────────────────────────
-const BASE_URL = (__ENV.BACKEND_URL || 'https://tripsyncbackend-production-37a2.up.railway.app')
+const BASE_URL = (__ENV.BACKEND_URL || 'https://tripsyncbackend-production-0364.up.railway.app')
   .replace(/\/$/, '');
 
 const HEADERS = {

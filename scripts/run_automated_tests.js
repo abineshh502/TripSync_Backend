@@ -19,7 +19,7 @@ const path  = require('path');
 const http  = require('http');
 const https = require('https');
 
-const TARGET_URL = (process.argv[2] || process.env.BACKEND_URL || 'https://tripsyncbackend-production-37a2.up.railway.app')
+const TARGET_URL = (process.argv[2] || process.env.BACKEND_URL || 'https://tripsyncbackend-production-0364.up.railway.app')
   .replace(/\/$/, '');
 const OUT_FILE = path.join(process.cwd(), 'test-results.json');
 
