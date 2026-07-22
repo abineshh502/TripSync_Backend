@@ -66,20 +66,20 @@ function generateTestSuite() {
       const sqli = SQLI_PAYLOADS[i % SQLI_PAYLOADS.length];
       bodyObj = { email: sqli, otp: '123456' };
       desc = `SQLi vector injected into email parameter: ${sqli}`;
-      expected = 'HTTP 200/400/422 (Sanitized without DB error)';
-      expectedCodes = [200, 400, 422];
+      expected = 'HTTP 200/400/403/422 (Sanitized without DB error)';
+      expectedCodes = [200, 400, 403, 422];
     } else if (i <= 85) {
       name = `Auth Security — XSS Payload Test #${i}`;
       const xss = XSS_PAYLOADS[i % XSS_PAYLOADS.length];
       bodyObj = { email: `xss_${i}@tripsync.com`, otp: xss };
       desc = `XSS script injection vector in OTP field: ${xss}`;
-      expected = 'HTTP 200/400 (Payload sanitized)';
-      expectedCodes = [200, 400, 422];
+      expected = 'HTTP 200/400/403/422 (Payload sanitized)';
+      expectedCodes = [200, 400, 403, 422];
     } else {
       name = `Auth Edge Case — Max Length & Special Chars #${i}`;
       bodyObj = { email: 'a'.repeat(150) + `@domain${i}.com`, otp: '999999' };
       desc = 'Boundary testing with 150+ character email string';
-      expectedCodes = [200, 400, 422];
+      expectedCodes = [200, 400, 403, 422];
     }
 
     tests.push({

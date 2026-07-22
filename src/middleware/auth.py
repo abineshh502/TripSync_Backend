@@ -28,7 +28,7 @@ import os
 import logging
 from typing import Optional
 
-from fastapi import HTTPException, Security, status
+from fastapi import Request, HTTPException, Security, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 logger = logging.getLogger(__name__)

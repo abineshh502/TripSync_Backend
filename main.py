@@ -414,9 +414,15 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     logger.warning("[VALIDATION] %s %s — %s", request.method, request.url.path, exc.errors())
+    sanitized_errors = []
+    for err in exc.errors():
+        err_copy = dict(err)
+        if "ctx" in err_copy and isinstance(err_copy["ctx"], dict):
+            err_copy["ctx"] = {k: str(v) for k, v in err_copy["ctx"].items()}
+        sanitized_errors.append(err_copy)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"error": "Invalid request data.", "details": exc.errors()},
+        content={"error": "Invalid request data.", "details": sanitized_errors},
     )
 
 
