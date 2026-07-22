@@ -46,9 +46,9 @@ on:
   workflow_dispatch:
     inputs:
       backend_url:
-        description: 'Backend URL to target (leave blank to use BACKEND_URL secret or Railway fallback)'
+        description: 'Backend URL to target (leave blank to use BACKEND_URL secret or Render fallback)'
         required: false
-        default: 'https://tripsyncbackend-production-37a2.up.railway.app'
+        default: 'https://tripsync-backend-ra7p.onrender.com'
       vus:
         description: 'Number of Virtual Users (default: 100)'
         required: false
@@ -101,16 +101,16 @@ jobs:
           npm --version
 
       # ── 5. Resolve target backend URL ────────────────────────────────────────
-      # Priority: workflow_dispatch input → BACKEND_URL secret → Railway URL
-      # The Railway URL is the confirmed production deployment (audited 2026-06-22).
+      # Priority: workflow_dispatch input → BACKEND_URL secret → Render URL
+      # The Render URL is the confirmed production deployment.
       - name: Resolve Backend URL
         id: resolve_url
         run: |
           INPUT_URL="${{ github.event.inputs.backend_url }}"
           SECRET_URL="${{ secrets.BACKEND_URL }}"
-          RAILWAY_URL="https://tripsyncbackend-production-0364.up.railway.app"
+          RENDER_URL="https://tripsync-backend-ra7p.onrender.com"
 
-          if [ -n "$INPUT_URL" ] && [ "$INPUT_URL" != "https://tripsyncbackend-production-0364.up.railway.app" ]; then
+          if [ -n "$INPUT_URL" ] && [ "$INPUT_URL" != "https://tripsync-backend-ra7p.onrender.com" ]; then
             # A custom URL was explicitly entered in the Run Workflow dialog
             TARGET_URL="$INPUT_URL"
             echo "📌 Source: workflow_dispatch custom input"
@@ -118,8 +118,8 @@ jobs:
             TARGET_URL="$SECRET_URL"
             echo "📌 Source: BACKEND_URL repository secret"
           else
-            TARGET_URL="$RAILWAY_URL"
-            echo "📌 Source: hardcoded Railway production URL"
+            TARGET_URL="$RENDER_URL"
+            echo "📌 Source: hardcoded Render production URL"
           fi
 
           # Strip trailing slash for consistency

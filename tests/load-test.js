@@ -46,7 +46,7 @@ export const options = {
 };
 
 // ── Target URL & Headers ──────────────────────────────────────────────────────
-const BASE_URL = (__ENV.BACKEND_URL || 'https://tripsyncbackend-production-0364.up.railway.app')
+const BASE_URL = (__ENV.BACKEND_URL || 'https://tripsync-backend-ra7p.onrender.com')
   .replace(/\/$/, '');
 
 const HEADERS = {
