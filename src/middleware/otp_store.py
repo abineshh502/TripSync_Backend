@@ -19,12 +19,13 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, Optional
+from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-OTP_TTL_SECONDS: int = int(os.environ.get("OTP_TTL_SECONDS", "300"))   # 5 min
-OTP_MAX_ATTEMPTS: int = int(os.environ.get("OTP_MAX_ATTEMPTS", "3"))
-OTP_LENGTH: int = int(os.environ.get("OTP_LENGTH", "6"))
+OTP_TTL_SECONDS: int = settings.OTP_TTL_SECONDS
+OTP_MAX_ATTEMPTS: int = settings.OTP_MAX_ATTEMPTS
+OTP_LENGTH: int = settings.OTP_LENGTH
 OTP_CLEANUP_INTERVAL: int = 120  # seconds
 
 

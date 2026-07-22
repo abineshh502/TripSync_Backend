@@ -81,6 +81,17 @@ class Settings:
     # ── CORS (never wildcard) ──
     CORS_ORIGINS: list = _parse_cors_origins()
 
+    # ── SMTP — Email / OTP Delivery ──
+    SMTP_HOST: str = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
+    SMTP_USER: str = os.environ.get("SMTP_USER", "")
+    SMTP_PASS: str = os.environ.get("SMTP_PASS", "")
+
+    # ── OTP Configuration ──
+    OTP_TTL_SECONDS: int = int(os.environ.get("OTP_TTL_SECONDS", "300"))
+    OTP_MAX_ATTEMPTS: int = int(os.environ.get("OTP_MAX_ATTEMPTS", "3"))
+    OTP_LENGTH: int = int(os.environ.get("OTP_LENGTH", "6"))
+
     # ── Rate Limiting ──
     RATE_LIMIT_GLOBAL: str = os.environ.get("RATE_LIMIT_GLOBAL", "60/minute")
     RATE_LIMIT_OTP: str    = os.environ.get("RATE_LIMIT_OTP",    "3/minute")
@@ -128,6 +139,13 @@ class Settings:
 
         if not self.CORS_ORIGINS:
             issues.append("CORS_ALLOWED_ORIGINS is empty — cross-origin requests will be blocked.")
+
+        # SMTP configuration verification (always logged as warning if incomplete, non-fatal)
+        if not self.SMTP_USER or not self.SMTP_PASS:
+            logger.warning(
+                "[STARTUP] SMTP configuration is incomplete (SMTP_USER and/or SMTP_PASS missing). "
+                "OTP email dispatch will be unavailable."
+            )
 
         if issues:
             for issue in issues:

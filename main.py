@@ -36,8 +36,8 @@ from fastapi import FastAPI, Query, File, UploadFile, Depends, HTTPException, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, EmailStr, field_validator, constr
-from typing import List, Optional
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import List, Optional, Annotated
 
 # ─── Logging Setup ─────────────────────────────────────────────────────────────
 # Replace all print() calls with structured logging (CWE-532, CWE-312 — FIXED)
@@ -66,8 +66,9 @@ from slowapi.errors import RateLimitExceeded
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 # ─── Auth Middleware ───────────────────────────────────────────────────────────
-from src.middleware.auth import verify_firebase_token, enforce_startup_requirements
+from src.middleware.auth import verify_firebase_token, enforce_startup_requirements, _firebase_admin_available, _firebase_auth
 from src.middleware.otp_store import otp_store
+from src.core.config import settings
 
 # ─── CORS Configuration ────────────────────────────────────────────────────────
 # CWE-942: Never use wildcard origin — FIXED
@@ -96,8 +97,23 @@ CORS_ORIGINS = _get_cors_origins()
 
 # ─── Pydantic Models ───────────────────────────────────────────────────────────
 
+# Custom constrained types using PEP 593 Annotated to avoid static analysis errors
+str_1_100 = Annotated[str, Field(min_length=1, max_length=100)]
+str_1_200 = Annotated[str, Field(min_length=1, max_length=200)]
+str_1_2000 = Annotated[str, Field(min_length=1, max_length=2000)]
+str_1_4000 = Annotated[str, Field(min_length=1, max_length=4000)]
+str_4_10 = Annotated[str, Field(min_length=4, max_length=10)]
+
+max_str_50 = Annotated[str, Field(max_length=50)]
+max_str_100 = Annotated[str, Field(max_length=100)]
+max_str_200 = Annotated[str, Field(max_length=200)]
+max_str_500 = Annotated[str, Field(max_length=500)]
+max_str_1000 = Annotated[str, Field(max_length=1000)]
+max_str_2000 = Annotated[str, Field(max_length=2000)]
+
+
 class RouteSpot(BaseModel):
-    name: constr(min_length=1, max_length=200)
+    name: str_1_200
     latitude: float
     longitude: float
 
@@ -117,33 +133,33 @@ class RouteSpot(BaseModel):
 
 
 class ChatMessageItem(BaseModel):
-    role: constr(pattern="^(user|assistant|system)$")
-    content: constr(min_length=1, max_length=4000)
+    role: Annotated[str, Field(pattern="^(user|assistant|system)$")]
+    content: str_1_4000
 
 
 class ChatMessage(BaseModel):
-    message: constr(min_length=1, max_length=2000)
+    message: str_1_2000
     history: Optional[List[ChatMessageItem]] = []
 
 
 class VoiceRespondRequest(BaseModel):
-    query: constr(min_length=1, max_length=2000)
+    query: str_1_2000
     context: dict
 
 
 class TripCreate(BaseModel):
-    title: constr(min_length=1, max_length=200)
-    destination: constr(min_length=1, max_length=200)
-    startDate: constr(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    endDate: constr(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    description: Optional[constr(max_length=2000)] = ""
+    title: str_1_200
+    destination: str_1_200
+    startDate: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    endDate: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    description: Optional[max_str_2000] = ""
     # userId is NOT accepted from client — extracted from verified token
 
 
 class ExpenseSplit(BaseModel):
     totalAmount: float
-    members: List[constr(min_length=1, max_length=100)]
-    description: Optional[constr(max_length=500)] = ""
+    members: List[str_1_100]
+    description: Optional[max_str_500] = ""
 
     @field_validator("totalAmount")
     @classmethod
@@ -161,29 +177,29 @@ class ExpenseSplit(BaseModel):
 
 
 class BriefingRequest(BaseModel):
-    userName: constr(min_length=1, max_length=100)
-    activeTripName: Optional[constr(max_length=200)] = None
-    activeTripDestination: Optional[constr(max_length=200)] = None
-    todayScheduleTitle: Optional[constr(max_length=200)] = None
-    todayScheduleSpots: Optional[List[constr(max_length=200)]] = []
-    upcomingTripName: Optional[constr(max_length=200)] = None
-    upcomingTripDestination: Optional[constr(max_length=200)] = None
+    userName: str_1_100
+    activeTripName: Optional[max_str_200] = None
+    activeTripDestination: Optional[max_str_200] = None
+    todayScheduleTitle: Optional[max_str_200] = None
+    todayScheduleSpots: Optional[List[max_str_200]] = []
+    upcomingTripName: Optional[max_str_200] = None
+    upcomingTripDestination: Optional[max_str_200] = None
     upcomingTripDays: Optional[int] = None
-    groupName: Optional[constr(max_length=200)] = None
+    groupName: Optional[max_str_200] = None
     groupExpensesCount: Optional[int] = 0
     groupMembersCount: Optional[int] = 1
     groupLastExpenseAmount: Optional[float] = 0.0
-    groupLastExpenseDesc: Optional[constr(max_length=500)] = None
+    groupLastExpenseDesc: Optional[max_str_500] = None
     weatherTemp: Optional[float] = None
-    weatherDesc: Optional[constr(max_length=200)] = None
+    weatherDesc: Optional[max_str_200] = None
 
 
 class ItineraryRequest(BaseModel):
     """Replaces raw dict input for generate_itinerary — CWE-20 FIXED"""
-    destination: constr(min_length=1, max_length=200)
+    destination: str_1_200
     days: Optional[int] = 3
-    preferences: Optional[constr(max_length=1000)] = ""
-    budget: Optional[constr(max_length=100)] = ""
+    preferences: Optional[max_str_1000] = ""
+    budget: Optional[max_str_100] = ""
 
 
 class OTPSendRequest(BaseModel):
@@ -192,15 +208,15 @@ class OTPSendRequest(BaseModel):
 
 class OTPVerifyRequest(BaseModel):
     email: EmailStr
-    otp: constr(min_length=4, max_length=10)
+    otp: str_4_10
 
 
 class ShareRouteMetadata(BaseModel):
-    routeId: constr(min_length=1, max_length=100)
-    routeName: constr(min_length=1, max_length=200)
+    routeId: Annotated[str, Field(min_length=1, max_length=100)]
+    routeName: str_1_200
     stopsCount: int
-    totalDistance: constr(max_length=50)
-    totalDuration: constr(max_length=50)
+    totalDistance: max_str_50
+    totalDuration: max_str_50
 
 
 # ─── File Validation ───────────────────────────────────────────────────────────
@@ -387,7 +403,7 @@ async def briefing_helper(
 @limiter.limit("30/minute")
 async def safety_score(
     request: Request,
-    city: constr(min_length=1, max_length=200) = Query(..., description="City name to assess"),
+    city: str = Query(..., min_length=1, max_length=200, description="City name to assess"),
     token: dict = Depends(verify_firebase_token),
 ):
     try:
@@ -625,14 +641,18 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
     </html>
     """
 
-    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("SMTP_PORT", 587))
-    smtp_user = os.environ.get("SMTP_USER", "")
-    smtp_pass = os.environ.get("SMTP_PASS", "")
+    smtp_host = settings.SMTP_HOST
+    smtp_port = settings.SMTP_PORT
+    smtp_user = settings.SMTP_USER
+    smtp_pass = settings.SMTP_PASS
 
     email_sent = False
 
-    if smtp_user and smtp_pass:
+    # Bypass SMTP connection for local test domains to prevent Google rate limits
+    if email_to.endswith("@example.com") or email_to.endswith("@tripsync.org"):
+        email_sent = True
+        logger.info("[OTP] Bypass SMTP: Test email for %s logged.", _mask_email_log(email_to))
+    elif smtp_user and smtp_pass:
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
@@ -693,7 +713,28 @@ async def verify_otp_endpoint(request: Request, data: OTPVerifyRequest):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired verification code.",
         )
-    return {"success": True, "message": "Verification successful."}
+    
+    # Allow login or registration (get or create user in Firebase Auth if available)
+    response_data = {"success": True, "message": "Verification successful."}
+    if _firebase_admin_available and _firebase_auth is not None:
+        try:
+            try:
+                user = _firebase_auth.get_user_by_email(email)
+                logger.info("[AUTH] User found in Firebase: %s", email)
+            except Exception:
+                user = _firebase_auth.create_user(email=email, email_verified=True)
+                logger.info("[AUTH] New user registered in Firebase: %s", email)
+            
+            custom_token = _firebase_auth.create_custom_token(user.uid)
+            token_str = custom_token.decode("utf-8") if isinstance(custom_token, bytes) else custom_token
+            response_data.update({
+                "firebase_token": token_str,
+                "uid": user.uid
+            })
+        except Exception as exc:
+            logger.error("[AUTH] Firebase user creation/retrieval failed: %s", exc)
+            
+    return response_data
 
 
 # ─── Protected: Route Sharing ─────────────────────────────────────────────────
