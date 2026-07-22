@@ -83,11 +83,20 @@ try:
             firebase_admin.initialize_app(cred)
             logger.info("✅ Firebase Admin initialised with service account: %s", creds_path)
         elif project_id:
-            # Use Application Default Credentials (e.g. Cloud Run, GKE)
-            firebase_admin.initialize_app(options={
-                "projectId": project_id
-            })
-            logger.info("✅ Firebase Admin initialised with Application Default Credentials (project=%s)", project_id)
+            # NOTE: We intentionally do NOT attempt Application Default Credentials (ADC)
+            # here because ADC makes a blocking network request to GCE metadata server
+            # (http://metadata.google.internal/) which does not exist on Railway/Heroku/Render
+            # and causes a 30-60 second hang that kills the process before uvicorn binds.
+            #
+            # To enable Firebase auth, set FIREBASE_CREDENTIALS_JSON or both
+            # FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY in Railway Variables.
+            raise FileNotFoundError(
+                f"Firebase project_id='{project_id}' is set, but FIREBASE_CLIENT_EMAIL and "
+                "FIREBASE_PRIVATE_KEY are missing. Application Default Credentials (ADC) are "
+                "not used on non-GCP platforms to avoid startup hangs. "
+                "Set FIREBASE_CREDENTIALS_JSON or both FIREBASE_CLIENT_EMAIL and "
+                "FIREBASE_PRIVATE_KEY in Railway Variables to enable Firebase authentication."
+            )
         else:
             raise FileNotFoundError(
                 f"Firebase service account not found at '{creds_path}' "
