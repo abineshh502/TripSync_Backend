@@ -47,14 +47,15 @@ try:
 
     _firebase_auth = firebase_auth_module
 
-    # Prefer explicit service account path; fall back to Application Default Credentials
-    creds_path = os.environ.get("FIREBASE_CREDENTIALS_PATH", "firebase-adminsdk.json")
+    from src.core.config import settings
+
+    creds_path = settings.FIREBASE_CREDS_PATH
 
     if not firebase_admin._apps:
-        creds_json = os.environ.get("FIREBASE_CREDENTIALS_JSON")
-        project_id = os.environ.get("FIREBASE_PROJECT_ID")
-        client_email = os.environ.get("FIREBASE_CLIENT_EMAIL")
-        private_key = os.environ.get("FIREBASE_PRIVATE_KEY")
+        creds_json = settings.FIREBASE_CREDENTIALS_JSON
+        project_id = settings.FIREBASE_PROJECT_ID
+        client_email = settings.FIREBASE_CLIENT_EMAIL
+        private_key = settings.FIREBASE_PRIVATE_KEY
 
         if creds_json:
             try:
