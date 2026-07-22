@@ -59,13 +59,12 @@ def _parse_cors_origins() -> list[str]:
             "http://127.0.0.1:3000",
         ]
 
-    # Production with no origins configured: restrict to no origins
-    # (API is still callable with same-origin requests)
-    logger.error(
+    # Production with no origins configured: fall back to default Vercel web app origin
+    logger.warning(
         "[CONFIG] CORS_ALLOWED_ORIGINS is not set in production mode. "
-        "Cross-origin requests will be blocked."
+        "Falling back to default origin: https://tripsync.vercel.app"
     )
-    return []
+    return ["https://tripsync.vercel.app"]
 
 
 class Settings:
@@ -144,7 +143,10 @@ class Settings:
             )
 
         if not self.CORS_ORIGINS:
-            issues.append("CORS_ALLOWED_ORIGINS is empty — cross-origin requests will be blocked.")
+            logger.warning(
+                "[STARTUP] CORS_ALLOWED_ORIGINS is empty. "
+                "Cross-origin requests will be blocked."
+            )
 
         # SMTP configuration verification (always logged as warning if incomplete, non-fatal)
         if not self.SMTP_USER or not self.SMTP_PASS:
