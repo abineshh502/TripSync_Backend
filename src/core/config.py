@@ -59,12 +59,19 @@ def _parse_cors_origins() -> list[str]:
             "http://127.0.0.1:3000",
         ]
 
-    # Production with no origins configured: fall back to default Vercel web app origin
-    logger.warning(
-        "[CONFIG] CORS_ALLOWED_ORIGINS is not set in production mode. "
-        "Falling back to default origin: https://tripsync.vercel.app"
+    # Production with no explicit CORS_ALLOWED_ORIGINS configured:
+    # Allow Vercel production Web App, local web clients, and mobile app webview origins
+    logger.info(
+        "[CONFIG] Using standard production/mobile default CORS origins (https://tripsync.vercel.app, capacitor://localhost, ionic://localhost)."
     )
-    return ["https://tripsync.vercel.app"]
+    return [
+        "https://tripsync.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "capacitor://localhost",
+        "ionic://localhost",
+    ]
 
 
 class Settings:

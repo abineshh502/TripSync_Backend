@@ -62,6 +62,7 @@ if os.path.exists(".env"):
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIASGIMiddleware
 
 from src.core.config import settings
 
@@ -69,7 +70,6 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[settings.RATE_LIMIT_GLOBAL]
 )
-limiter._request_filters.append(lambda *args, **kwargs: settings.APP_ENV == "development")
 
 # ─── Auth Middleware ───────────────────────────────────────────────────────────
 from src.middleware.auth import verify_firebase_token, enforce_startup_requirements, _firebase_admin_available, _firebase_auth
@@ -79,24 +79,7 @@ from src.core.config import settings
 # ─── CORS Configuration ────────────────────────────────────────────────────────
 # CWE-942: Never use wildcard origin — FIXED
 def _get_cors_origins() -> list:
-    raw = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
-    if raw:
-        origins = [o.strip() for o in raw.split(",") if o.strip() and o.strip() != "*"]
-        return origins if origins else _dev_origins()
-    return _dev_origins()
-
-
-def _dev_origins() -> list:
-    env = os.environ.get("APP_ENV", "development").lower()
-    if env == "development":
-        logger.warning("[CORS] Using localhost-only defaults. Set CORS_ALLOWED_ORIGINS for production.")
-        return [
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://127.0.0.1:3000",
-        ]
-    logger.error("[CORS] CORS_ALLOWED_ORIGINS not set in production.")
-    return []
+    return settings.CORS_ORIGINS
 
 
 CORS_ORIGINS = _get_cors_origins()
@@ -314,15 +297,16 @@ async def lifespan(app: FastAPI):
 # ─── Docs URL Control ─────────────────────────────────────────────────────────
 # Set ENABLE_DOCS=true in Railway environment variables to expose /docs and /redoc.
 # This is independent of APP_ENV so production deployments can optionally expose docs.
-_ENABLE_DOCS = os.environ.get("ENABLE_DOCS", "").lower() in ("1", "true", "yes")
-_APP_IS_DEV = os.environ.get("APP_ENV", "development").lower() == "development"
-_SHOW_DOCS = _ENABLE_DOCS or _APP_IS_DEV
+# ─── Docs URL Control ─────────────────────────────────────────────────────────
+# Enable Swagger UI (/docs, /redoc, /openapi.json) by default for production & development.
+# Set DISABLE_DOCS=true in environment variables to hide docs if desired.
+_DISABLE_DOCS = os.environ.get("DISABLE_DOCS", "").lower() in ("1", "true", "yes")
+_SHOW_DOCS = not _DISABLE_DOCS
 
 app = FastAPI(
     title="TripSync Core AI Backend Service",
     description="Scalable async FastAPI backend for AI Chatbot, travel safety, TSP route solver & more.",
     version="2.0.0",
-    # Docs are shown in development OR when ENABLE_DOCS=true is set explicitly
     docs_url="/docs" if _SHOW_DOCS else None,
     redoc_url="/redoc" if _SHOW_DOCS else None,
     openapi_url="/openapi.json" if _SHOW_DOCS else None,
@@ -331,6 +315,7 @@ app = FastAPI(
 
 # ─── Rate Limiting State Handler ───────────────────────────────────────────────
 app.state.limiter = limiter
+app.add_middleware(SlowAPIASGIMiddleware)
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ─── CORS Middleware — explicit origins only ───────────────────────────────────
