@@ -6,6 +6,11 @@ from src.services.ai_provider import ai_provider
 
 logger = logging.getLogger(__name__)
 
+import time
+
+_safety_cache = {}  # city.lower() -> (timestamp, result_dict)
+
+
 class AIService:
     def __init__(self):
         # OpenAI client initialization is completely removed
@@ -195,6 +200,13 @@ Ensure that activities contain specific local restaurants, actual sightseeing at
         Determines safety score, weather hazard index, traffic delays, hidden gems
         by fetching live weather data and analyzing via free AI models.
         """
+        cache_key = city.strip().lower()
+        now = time.time()
+        if cache_key in _safety_cache:
+            ts, cached_result = _safety_cache[cache_key]
+            if now - ts < 300:  # 5-minute TTL cache
+                return cached_result
+
         lat, lon, country = 0.0, 0.0, ""
         import httpx
         try:
@@ -282,12 +294,15 @@ Respond ONLY with the raw JSON string."""
                 
                 import json
                 parsed = json.loads(cleaned)
+                _safety_cache[cache_key] = (now, parsed)
                 return parsed
         except Exception as e:
             logger.error("Free AI safety assessment failed: %s", e)
 
         # Fallback to local template-based logic
-        return self._generate_fallback_safety(city, country, temp)
+        res_fb = self._generate_fallback_safety(city, country, temp)
+        _safety_cache[cache_key] = (now, res_fb)
+        return res_fb
 
     async def generate_voice_response(self, query: str, context: dict) -> str:
         """

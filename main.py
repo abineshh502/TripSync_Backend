@@ -947,6 +947,9 @@ async def generate_itinerary(
     return result
 
 
+_weather_cache = {}  # (round(lat, 2), round(lon, 2)) -> (timestamp, data)
+
+
 # ─── Protected: Weather Proxy ─────────────────────────────────────────────────
 @app.get("/api/weather", tags=["Weather"])
 @limiter.limit("30/minute")
@@ -956,6 +959,13 @@ async def weather_proxy(
     lon: float = Query(..., ge=-180, le=180, description="Longitude"),
     token: dict = Depends(verify_firebase_token),
 ):
+    cache_key = (round(lat, 2), round(lon, 2))
+    now = time.time()
+    if cache_key in _weather_cache:
+        ts, cached_data = _weather_cache[cache_key]
+        if now - ts < 300:  # 5-minute TTL cache
+            return cached_data
+
     import httpx
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -965,7 +975,9 @@ async def weather_proxy(
             )
             res.raise_for_status()
             data = res.json()
-            return data.get("current_weather", {})
+            cw = data.get("current_weather", {})
+            _weather_cache[cache_key] = (now, cw)
+            return cw
     except httpx.HTTPStatusError:
         raise HTTPException(status_code=502, detail="Weather service returned an error.")
     except Exception:

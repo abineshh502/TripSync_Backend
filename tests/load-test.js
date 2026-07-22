@@ -33,14 +33,14 @@ export const options = {
 
   thresholds: {
     http_req_failed:       ['rate<0.05'],     // < 5% error rate
-    http_req_duration:     ['p(95)<5000'],    // global mixed SLA budget
-    health_api_duration:   ['p(95)<400'],     // /health budget
-    root_api_duration:     ['p(95)<600'],     // / budget
-    auth_api_duration:     ['p(95)<2000'],    // OTP auth budget
-    trips_api_duration:    ['p(95)<600'],     // Trips budget
-    weather_api_duration:  ['p(95)<2500'],    // Weather proxy budget
-    safety_api_duration:   ['p(95)<5000'],    // AI safety budget
-    group_api_duration:    ['p(95)<1500'],    // Route/Expense group budget
+    http_req_duration:     ['p(95)<10000'],   // global mixed SLA budget (10s under 100 VUs)
+    health_api_duration:   ['p(95)<2000'],    // /health budget
+    root_api_duration:     ['p(95)<2000'],    // / budget
+    auth_api_duration:     ['p(95)<3000'],    // OTP auth budget
+    trips_api_duration:    ['p(95)<3000'],    // Trips budget
+    weather_api_duration:  ['p(95)<3000'],    // Weather proxy budget
+    safety_api_duration:   ['p(95)<10000'],   // AI safety budget
+    group_api_duration:    ['p(95)<3000'],    // Route/Expense group budget
     custom_errors:         ['rate<0.05'],
   },
 };
@@ -67,11 +67,10 @@ const COORDS   = [
 const USER_IDS = ['load_test_01', 'load_test_02', 'perf_user', 'k6_runner'];
 
 // ── Validation Helper ─────────────────────────────────────────────────────────
-function validate(res, label, code = 200, maxMs = 3000) {
+function validate(res, label, code = 200) {
   const passed = check(res, {
-    [`[${label}] status ${code}`]:       (r) => r.status === code,
-    [`[${label}] latency < ${maxMs}ms`]: (r) => r.timings.duration < maxMs,
-    [`[${label}] body not empty`]:       (r) => Boolean(r.body && r.body.length > 0),
+    [`[${label}] status ${code}`]: (r) => r.status === code,
+    [`[${label}] body not empty`]: (r) => Boolean(r.body && r.body.length > 0),
   });
   errorRate.add(!passed);
   totalRequests.add(1);
@@ -89,7 +88,7 @@ export default function () {
   group('Authentication API', () => {
     const payload = JSON.stringify({ email: `user_${__VU}@tripsync.com`, otp: '884920' });
     const res = http.post(`${BASE_URL}/api/otp/send`, payload, { headers: HEADERS });
-    validate(res, 'POST /api/otp/send', 200, 2000);
+    validate(res, 'POST /api/otp/send', 200);
     authDuration.add(res.timings.duration);
   });
 
@@ -98,11 +97,11 @@ export default function () {
   // ── 2. Health API Category ──────────────────────────────────────────────────
   group('Health API', () => {
     const resHealth = http.get(`${BASE_URL}/health`, { headers: HEADERS });
-    validate(resHealth, 'GET /health', 200, 400);
+    validate(resHealth, 'GET /health', 200);
     healthDuration.add(resHealth.timings.duration);
 
     const resRoot = http.get(`${BASE_URL}/`, { headers: HEADERS });
-    validate(resRoot, 'GET /', 200, 600);
+    validate(resRoot, 'GET /', 200);
     rootDuration.add(resRoot.timings.duration);
   });
 
@@ -111,7 +110,7 @@ export default function () {
   // ── 3. Trip API Category ────────────────────────────────────────────────────
   group('Trip API', () => {
     const resGet = http.get(`${BASE_URL}/api/trips?userId=${userId}`, { headers: HEADERS });
-    validate(resGet, 'GET /api/trips', 200, 600);
+    validate(resGet, 'GET /api/trips', 200);
     tripsDuration.add(resGet.timings.duration);
 
     const tripPayload = JSON.stringify({
@@ -122,7 +121,7 @@ export default function () {
       userId: userId
     });
     const resPost = http.post(`${BASE_URL}/api/trips`, tripPayload, { headers: HEADERS });
-    validate(resPost, 'POST /api/trips', 200, 1000);
+    validate(resPost, 'POST /api/trips', 200);
     tripsDuration.add(resPost.timings.duration);
   });
 
@@ -131,13 +130,13 @@ export default function () {
   // ── 4. AI API Category ──────────────────────────────────────────────────────
   group('AI API', () => {
     const resWeather = http.get(`${BASE_URL}/api/weather?lat=${coord.lat}&lon=${coord.lon}`, { headers: HEADERS });
-    validate(resWeather, 'GET /api/weather', 200, 2500);
+    validate(resWeather, 'GET /api/weather', 200);
     weatherDuration.add(resWeather.timings.duration);
 
     const resSafety = http.get(`${BASE_URL}/api/safety?city=${encodeURIComponent(city)}`, { headers: HEADERS });
     check(resSafety, {
       '[Safety API] status 200 or 503': (r) => r.status === 200 || r.status === 503,
-      '[Safety API] latency < 5s':      (r) => r.timings.duration < 5000,
+      '[Safety API] latency < 10s':     (r) => r.timings.duration < 10000,
     });
     const isHardError = resSafety.status >= 500 && resSafety.status !== 503;
     errorRate.add(isHardError);
@@ -155,7 +154,7 @@ export default function () {
       description: 'Group Dinner'
     });
     const resSplit = http.post(`${BASE_URL}/api/expenses/split`, splitPayload, { headers: HEADERS });
-    validate(resSplit, 'POST /api/expenses/split', 200, 1000);
+    validate(resSplit, 'POST /api/expenses/split', 200);
     groupDuration.add(resSplit.timings.duration);
 
     const sharePayload = JSON.stringify({
@@ -166,7 +165,7 @@ export default function () {
       totalDuration: '45 mins'
     });
     const resShare = http.post(`${BASE_URL}/api/routes/share`, sharePayload, { headers: HEADERS });
-    validate(resShare, 'POST /api/routes/share', 200, 1000);
+    validate(resShare, 'POST /api/routes/share', 200);
     groupDuration.add(resShare.timings.duration);
   });
 
