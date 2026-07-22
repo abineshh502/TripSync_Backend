@@ -1,7 +1,10 @@
 import os
 import random
 import urllib.parse
+import logging
 from src.services.ai_provider import ai_provider
+
+logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
@@ -24,7 +27,7 @@ class AIService:
             if reply:
                 return reply
         except Exception as e:
-            print(f"⚠️ Free AI provider chain failed: {e}. Running local fallback.")
+            logger.error("Free AI provider chain failed: %s. Running local fallback.", e)
 
         return self._generate_sophisticated_fallback(message)
 
@@ -71,7 +74,7 @@ Write a natural speech script (3-4 sentences max) that can be read aloud. Start 
             if briefing:
                 return briefing.strip().replace("*", "").replace("#", "")
         except Exception as e:
-            print(f"⚠️ Free AI voice briefing failed: {e}. Running local fallback.")
+            logger.error("Free AI voice briefing failed: %s. Running local fallback.", e)
 
         # Highly dynamic local fallback generation
         from datetime import datetime
@@ -182,7 +185,7 @@ Ensure that activities contain specific local restaurants, actual sightseeing at
                 if "itinerary" in parsed:
                     return parsed
         except Exception as e:
-            print(f"⚠️ Free AI itinerary generation failed, falling back: {e}")
+            logger.error("Free AI itinerary generation failed, falling back: %s", e)
 
         # Fallback to local template logic
         return self._generate_fallback_itinerary(destination, days, interests, travel_style, group_solo)
@@ -206,7 +209,7 @@ Ensure that activities contain specific local restaurants, actual sightseeing at
                         lon = results[0]["longitude"]
                         country = results[0].get("country", "")
         except Exception as e:
-            print(f"⚠️ Geocoding failed for {city}: {e}")
+            logger.warning("Geocoding failed for %s: %s", city, e)
 
         weather_info = "Weather data unavailable"
         temp = None
@@ -236,7 +239,7 @@ Ensure that activities contain specific local restaurants, actual sightseeing at
                         w_desc = w_descs.get(wcode, "cloudy")
                         weather_info = f"Current temperature: {temp}°C. Weather status: {w_desc}."
             except Exception as e:
-                print(f"⚠️ Weather fetch failed: {e}")
+                logger.warning("Weather fetch failed: %s", e)
 
         prompt = f"""Perform a travel safety, traffic, and local risk assessment for the city: {city}, {country}.
 Current weather context: {weather_info}
@@ -281,7 +284,7 @@ Respond ONLY with the raw JSON string."""
                 parsed = json.loads(cleaned)
                 return parsed
         except Exception as e:
-            print(f"⚠️ Free AI safety assessment failed: {e}")
+            logger.error("Free AI safety assessment failed: %s", e)
 
         # Fallback to local template-based logic
         return self._generate_fallback_safety(city, country, temp)
@@ -338,7 +341,7 @@ Keep it concise (3-4 sentences maximum) and suitable for a text-to-speech engine
             if content:
                 return content.strip().replace("*", "").replace("#", "")
         except Exception as e:
-            print(f"⚠️ Free AI voice response failed: {e}")
+            logger.error("Free AI voice response failed: %s", e)
 
         # Fallback simple answer based on keywords
         return self._generate_fallback_voice(query, context)

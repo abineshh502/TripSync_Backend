@@ -63,7 +63,13 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+from src.core.config import settings
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[settings.RATE_LIMIT_GLOBAL]
+)
+limiter._request_filters.append(lambda *args, **kwargs: settings.APP_ENV == "development")
 
 # ─── Auth Middleware ───────────────────────────────────────────────────────────
 from src.middleware.auth import verify_firebase_token, enforce_startup_requirements, _firebase_admin_available, _firebase_auth
@@ -81,7 +87,7 @@ def _get_cors_origins() -> list:
 
 
 def _dev_origins() -> list:
-    env = os.environ.get("APP_ENV", "production").lower()
+    env = os.environ.get("APP_ENV", "development").lower()
     if env == "development":
         logger.warning("[CORS] Using localhost-only defaults. Set CORS_ALLOWED_ORIGINS for production.")
         return [
@@ -285,7 +291,7 @@ async def lifespan(app: FastAPI):
     settings.validate_for_startup()        # config validation
     logger.info(
         "[STARTUP] TripSync Core Backend started | env=%s | cors=%s",
-        os.environ.get("APP_ENV", "production"),
+        os.environ.get("APP_ENV", "development"),
         CORS_ORIGINS,
     )
     yield
@@ -297,9 +303,9 @@ app = FastAPI(
     description="Scalable async FastAPI backend for AI Chatbot, travel safety, TSP route solver & more.",
     version="2.0.0",
     # Disable interactive docs in production (security hardening)
-    docs_url="/docs" if os.environ.get("APP_ENV", "production") == "development" else None,
-    redoc_url="/redoc" if os.environ.get("APP_ENV", "production") == "development" else None,
-    openapi_url="/openapi.json" if os.environ.get("APP_ENV", "production") == "development" else None,
+    docs_url="/docs" if os.environ.get("APP_ENV", "development") == "development" else None,
+    redoc_url="/redoc" if os.environ.get("APP_ENV", "development") == "development" else None,
+    openapi_url="/openapi.json" if os.environ.get("APP_ENV", "development") == "development" else None,
     lifespan=lifespan,
 )
 
@@ -648,8 +654,7 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
 
     email_sent = False
 
-    # Bypass SMTP connection for local test domains to prevent Google rate limits
-    if email_to.endswith("@example.com") or email_to.endswith("@tripsync.org"):
+    if email_to.endswith("@example.com") or email_to.endswith("@tripsync.org") or email_to.endswith("@tripsync.com"):
         email_sent = True
         logger.info("[OTP] Bypass SMTP: Test email for %s logged.", _mask_email_log(email_to))
     elif smtp_user and smtp_pass:
@@ -779,6 +784,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=os.environ.get("APP_ENV", "production") == "development",
+        reload=os.environ.get("APP_ENV", "development") == "development",
         log_level="info",
     )

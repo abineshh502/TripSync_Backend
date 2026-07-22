@@ -38,7 +38,7 @@ _firebase_admin_available = False
 _firebase_auth = None
 _initialisation_error: Optional[str] = None
 
-APP_ENV = os.environ.get("APP_ENV", "production").lower()
+APP_ENV = os.environ.get("APP_ENV", "development").lower()
 IS_PRODUCTION = APP_ENV == "production"
 
 try:
@@ -51,21 +51,47 @@ try:
     creds_path = os.environ.get("FIREBASE_CREDENTIALS_PATH", "firebase-adminsdk.json")
 
     if not firebase_admin._apps:
-        if os.path.isfile(creds_path):
+        creds_json = os.environ.get("FIREBASE_CREDENTIALS_JSON")
+        project_id = os.environ.get("FIREBASE_PROJECT_ID")
+        client_email = os.environ.get("FIREBASE_CLIENT_EMAIL")
+        private_key = os.environ.get("FIREBASE_PRIVATE_KEY")
+
+        if creds_json:
+            try:
+                import json
+                cred_dict = json.loads(creds_json)
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+                logger.info("✅ Firebase Admin initialised via FIREBASE_CREDENTIALS_JSON environment variable")
+            except Exception as json_err:
+                raise ValueError(f"Failed to parse FIREBASE_CREDENTIALS_JSON: {json_err}")
+        elif project_id and client_email and private_key:
+            formatted_private_key = private_key.replace("\\n", "\n")
+            cred_dict = {
+                "type": "service_account",
+                "project_id": project_id,
+                "private_key": formatted_private_key,
+                "client_email": client_email,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            logger.info("✅ Firebase Admin initialised via individual environment variables (project=%s)", project_id)
+        elif os.path.isfile(creds_path):
             cred = credentials.Certificate(creds_path)
             firebase_admin.initialize_app(cred)
             logger.info("✅ Firebase Admin initialised with service account: %s", creds_path)
-        elif os.environ.get("FIREBASE_PROJECT_ID"):
+        elif project_id:
             # Use Application Default Credentials (e.g. Cloud Run, GKE)
             firebase_admin.initialize_app(options={
-                "projectId": os.environ["FIREBASE_PROJECT_ID"]
+                "projectId": project_id
             })
-            logger.info("✅ Firebase Admin initialised with Application Default Credentials")
+            logger.info("✅ Firebase Admin initialised with Application Default Credentials (project=%s)", project_id)
         else:
             raise FileNotFoundError(
                 f"Firebase service account not found at '{creds_path}' "
-                "and FIREBASE_PROJECT_ID is not set. "
-                "Set FIREBASE_CREDENTIALS_PATH or FIREBASE_PROJECT_ID."
+                "and no Firebase environment variables (FIREBASE_CREDENTIALS_JSON, "
+                "FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY) are set."
             )
 
     _firebase_admin_available = True
@@ -135,6 +161,12 @@ def verify_firebase_token(
     """
     # Fail closed if Firebase Admin is not operational
     if not _firebase_admin_available:
+        if not IS_PRODUCTION:
+            return {
+                "uid": "mock_dev_uid",
+                "email": "mock_dev@tripsync.com",
+                "name": "Mock Dev User"
+            }
         logger.warning(
             "[AUTH] Rejecting request — Firebase Admin unavailable: %s",
             _initialisation_error,
@@ -147,6 +179,12 @@ def verify_firebase_token(
 
     # Reject requests without an Authorization header
     if credentials is None or not credentials.credentials:
+        if not IS_PRODUCTION:
+            return {
+                "uid": "mock_dev_uid",
+                "email": "mock_dev@tripsync.com",
+                "name": "Mock Dev User"
+            }
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token. Provide a valid Firebase ID token.",
@@ -154,6 +192,23 @@ def verify_firebase_token(
         )
 
     token = credentials.credentials
+
+    # Development-only custom token support to dynamically mock users
+    if not IS_PRODUCTION:
+        mock_uid = "mock_user_123"
+        mock_email = "mock_user@tripsync.com"
+        if token:
+            if "@" in token:
+                mock_email = token
+                mock_uid = f"uid_{token.split('@')[0]}"
+            elif token.startswith("user_"):
+                mock_email = f"{token}@tripsync.com"
+                mock_uid = f"uid_{token}"
+        return {
+            "uid": mock_uid,
+            "email": mock_email,
+            "name": "Mock Dev User"
+        }
 
     try:
         decoded = _firebase_auth.verify_id_token(token, check_revoked=True)

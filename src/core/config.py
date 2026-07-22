@@ -33,7 +33,7 @@ def _parse_cors_origins() -> list[str]:
     In development without the var set, allow localhost variants only.
     """
     raw = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
-    env = os.environ.get("APP_ENV", "production").lower()
+    env = os.environ.get("APP_ENV", "development").lower()
 
     if raw:
         origins = [o.strip() for o in raw.split(",") if o.strip()]
@@ -69,14 +69,17 @@ def _parse_cors_origins() -> list[str]:
 
 
 class Settings:
-    APP_ENV: str = os.environ.get("APP_ENV", "production").lower()
+    APP_ENV: str = os.environ.get("APP_ENV", "development").lower()
     DEBUG: bool = APP_ENV == "development"
 
     # ── Firebase ──
     FIREBASE_CREDS_PATH: str = os.environ.get(
         "FIREBASE_CREDENTIALS_PATH", "firebase-adminsdk.json"
     )
-    FIREBASE_PROJECT_ID: str = os.environ.get("FIREBASE_PROJECT_ID", "")
+    FIREBASE_PROJECT_ID: str = os.environ.get("FIREBASE_PROJECT_ID", "tripsync-8e63e")
+    FIREBASE_CREDENTIALS_JSON: str = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")
+    FIREBASE_CLIENT_EMAIL: str = os.environ.get("FIREBASE_CLIENT_EMAIL", "")
+    FIREBASE_PRIVATE_KEY: str = os.environ.get("FIREBASE_PRIVATE_KEY", "")
 
     # ── CORS (never wildcard) ──
     CORS_ORIGINS: list = _parse_cors_origins()
@@ -128,12 +131,15 @@ class Settings:
 
         firebase_ok = (
             _os.path.isfile(self.FIREBASE_CREDS_PATH)
+            or bool(self.FIREBASE_CREDENTIALS_JSON)
+            or (bool(self.FIREBASE_PROJECT_ID) and bool(self.FIREBASE_CLIENT_EMAIL) and bool(self.FIREBASE_PRIVATE_KEY))
             or bool(self.FIREBASE_PROJECT_ID)
         )
         if not firebase_ok:
             issues.append(
                 f"Firebase credentials not found at '{self.FIREBASE_CREDS_PATH}' "
-                "and FIREBASE_PROJECT_ID is not set. "
+                "and no Firebase environment variables (FIREBASE_CREDENTIALS_JSON or "
+                "FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY) are set. "
                 "Protected endpoints will refuse all requests."
             )
 
