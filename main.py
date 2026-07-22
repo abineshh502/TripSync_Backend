@@ -1001,6 +1001,12 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
 
     email_to = str(data.email)
 
+    if len(email_to) > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email address exceeds maximum allowed length of 100 characters.",
+        )
+
     # Generate OTP and store securely (single-use + expiry + retry limit)
     otp_code = otp_store.generate(email_to)
 

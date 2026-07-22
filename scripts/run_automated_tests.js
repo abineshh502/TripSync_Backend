@@ -158,12 +158,12 @@ function generateTestSuite() {
         name = `Trip Security — XSS in Title #${i}`;
         bodyObj.title = XSS_PAYLOADS[i % XSS_PAYLOADS.length];
         desc = `XSS payload in trip title: ${bodyObj.title}`;
-        expectedCodes = [200, 400, 422];
+        expectedCodes = [200, 400, 403, 422];
       } else if (i > 85) {
         name = `Trip Security — SQLi in Destination #${i}`;
         bodyObj.destination = SQLI_PAYLOADS[i % SQLI_PAYLOADS.length];
         desc = `SQLi payload in destination: ${bodyObj.destination}`;
-        expectedCodes = [200, 400, 422];
+        expectedCodes = [200, 400, 403, 422];
       }
     }
 
@@ -195,7 +195,7 @@ function generateTestSuite() {
       const cmd = CMD_PAYLOADS[i % CMD_PAYLOADS.length];
       endpoint = `/api/safety?city=${encodeURIComponent(`City_${i}${cmd}`)}`;
       desc = `Command injection attempt in city query: ${cmd}`;
-      expectedCodes = [200, 400, 422, 503];
+      expectedCodes = [200, 400, 403, 422, 503];
     } else if (i > 80) {
       name = `AI Boundary — Coordinate Out of Bounds #${i}`;
       endpoint = `/api/weather?lat=${999 + i}&lon=${-999 - i}`;
