@@ -303,15 +303,76 @@ async def lifespan(app: FastAPI):
 _DISABLE_DOCS = os.environ.get("DISABLE_DOCS", "").lower() in ("1", "true", "yes")
 _SHOW_DOCS = not _DISABLE_DOCS
 
+# ─── OpenAPI Security Scheme Definitions ──────────────────────────────────────
+# Declares FirebaseBearer so the Swagger UI Authorize button maps to Firebase ID Tokens.
+_OPENAPI_SECURITY_SCHEMES: dict = {
+    "FirebaseBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Firebase ID Token",
+        "description": (
+            "**Firebase ID Token** — obtained via the TripSync OTP login flow:\n\n"
+            "1. `POST /api/otp/send` — send OTP to your email\n"
+            "2. `POST /auth/token` — verify OTP → receive `id_token` directly\n"
+            "3. Click **Authorize** above and paste the `id_token` value\n\n"
+            "See `GET /auth/info` for the complete authentication architecture."
+        ),
+    }
+}
+
 app = FastAPI(
     title="TripSync Core AI Backend Service",
-    description="Scalable async FastAPI backend for AI Chatbot, travel safety, TSP route solver & more.",
+    description=(
+        "Scalable async FastAPI backend for AI Chatbot, travel safety, TSP route solver & more.\n\n"
+        "## Authentication\n"
+        "This API uses **Firebase ID Tokens** for authentication.\n\n"
+        "**Quick Start (Swagger):**\n"
+        "1. `POST /api/otp/send` → enter your email\n"
+        "2. `POST /auth/token` → verify OTP → copy the `id_token` from the response\n"
+        "3. Click **🔓 Authorize** → paste the `id_token` → all protected endpoints unlock\n\n"
+        "See `GET /auth/info` for full architecture documentation."
+    ),
     version="2.0.0",
     docs_url="/docs" if _SHOW_DOCS else None,
     redoc_url="/redoc" if _SHOW_DOCS else None,
     openapi_url="/openapi.json" if _SHOW_DOCS else None,
     lifespan=lifespan,
+    openapi_tags=[
+        {"name": "Public", "description": "Public endpoints — no authentication required."},
+        {"name": "Auth", "description": "Authentication flow — OTP login, token exchange, and documentation."},
+        {"name": "AI", "description": "AI-powered endpoints — Firebase ID Token required."},
+        {"name": "Trips", "description": "Trip management — Firebase ID Token required."},
+        {"name": "Routes", "description": "Route optimization and sharing — Firebase ID Token required."},
+        {"name": "Expenses", "description": "Expense splitting — Firebase ID Token required."},
+        {"name": "Voice", "description": "Voice transcription and responses — Firebase ID Token required."},
+        {"name": "Safety", "description": "City safety scores — Firebase ID Token required."},
+        {"name": "Weather", "description": "Weather proxy — Firebase ID Token required."},
+        {"name": "OTP", "description": "OTP send/verify — public endpoints for the login flow."},
+    ],
 )
+
+
+def _add_security_schemes(openapi_schema: dict) -> dict:
+    """Inject FirebaseBearer securitySchemes into the generated OpenAPI schema."""
+    openapi_schema.setdefault("components", {})
+    openapi_schema["components"].setdefault("securitySchemes", {})
+    openapi_schema["components"]["securitySchemes"].update(_OPENAPI_SECURITY_SCHEMES)
+    # Apply global security requirement — all operations with auth will show the lock
+    openapi_schema["security"] = [{"FirebaseBearer": []}]
+    return openapi_schema
+
+
+if _SHOW_DOCS:
+    _original_openapi = app.openapi
+
+    def _custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = _original_openapi()
+        app.openapi_schema = _add_security_schemes(schema)
+        return app.openapi_schema
+
+    app.openapi = _custom_openapi
 
 # ─── Rate Limiting State Handler ───────────────────────────────────────────────
 app.state.limiter = limiter
@@ -351,7 +412,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ─── Public Endpoints (no auth) ────────────────────────────────────────────────
-@app.get("/")
+@app.get("/", tags=["Public"])
 @limiter.limit("30/minute")
 def read_root(request: Request):
     """Public health/info endpoint — no authentication required."""
@@ -364,11 +425,293 @@ def read_root(request: Request):
     }
 
 
-@app.get("/health")
+@app.get("/health", tags=["Public"])
 @limiter.limit("120/minute")
 def health_check(request: Request):
     """Health probe — public, no authentication required."""
     return {"status": "ok"}
+
+
+# ─── Auth Info ─────────────────────────────────────────────────────────────────
+@app.get(
+    "/auth/info",
+    tags=["Auth"],
+    summary="Authentication Architecture & Swagger Testing Guide",
+    response_description="Complete authentication flow documentation",
+)
+@limiter.limit("30/minute")
+def auth_info(request: Request):
+    """
+    ## TripSync Authentication Architecture
+
+    This backend uses **Firebase Authentication** with a custom **OTP (Email One-Time Password)**
+    login flow. No username/password login exists — authentication is always OTP-based.
+
+    ---
+
+    ### Authentication Flow
+
+    ```
+    Client                      Backend                       Firebase
+      |                            |                              |
+      |-- POST /api/otp/send ----> |-- generate OTP ------------> |
+      |                            |-- email OTP to user -------> |
+      |<-- {success: true} --------|                              |
+      |                            |                              |
+      |-- POST /auth/token ------> |-- verify OTP                 |
+      |   {email, otp}             |-- create/get Firebase user-> |
+      |                            |-- create custom token -----> |
+      |                            |-- exchange for ID token ---> |
+      |<-- {id_token, uid, ...} ---|<-- ID Token response --------|  
+      |                            |                              |
+      | (use id_token as Bearer)   |                              |
+      |-- POST /api/chat --------> |-- verify_firebase_token      |
+      |   Authorization: Bearer    |-- verify_id_token(token) --> |
+      |   <id_token>               |<-- decoded claims -----------|
+      |<-- {reply: "..."} ---------|                              |
+    ```
+
+    ---
+
+    ### Token Types
+
+    | Token | Description | Used Where |
+    |---|---|---|
+    | **OTP** | 6-digit numeric code, valid 5 min | `POST /auth/token` |
+    | **Firebase Custom Token** | Short-lived JWT, signed by server | Internal only |
+    | **Firebase ID Token** | JWT, valid ~1h, auto-refreshable | `Authorization: Bearer <id_token>` |
+
+    ---
+
+    ### Swagger Testing (3 steps)
+
+    **Step 1:** `POST /api/otp/send` — enter your email address to receive an OTP
+
+    **Step 2:** `POST /auth/token` — enter your email + OTP → copy the `id_token` from the response
+
+    **Step 3:** Click **🔓 Authorize** at the top of this page → paste the `id_token` → click Authorize
+
+    All protected endpoints will now work from Swagger.
+
+    ---
+
+    ### Mobile / Web App Integration
+
+    ```javascript
+    // Step 1: Send OTP
+    await fetch('/api/otp/send', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'user@example.com' })
+    });
+
+    // Step 2: Verify OTP & get ID Token
+    const res = await fetch('/auth/token', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'user@example.com', otp: '123456' })
+    });
+    const { id_token, uid, expires_in } = await res.json();
+
+    // Step 3: Use ID Token in all API calls
+    await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${id_token}` },
+      body: JSON.stringify({ message: 'Hello!' })
+    });
+    ```
+    """
+    firebase_available = _firebase_admin_available
+    project_id = settings.FIREBASE_PROJECT_ID or "(not configured)"
+    web_api_key = os.environ.get("FIREBASE_WEB_API_KEY", "")
+    token_exchange_available = firebase_available and bool(web_api_key)
+
+    return {
+        "authentication_type": "Firebase ID Token (Bearer)",
+        "login_mechanism": "Email OTP",
+        "token_lifetime_seconds": 3600,
+        "firebase_project_id": project_id,
+        "firebase_admin_initialized": firebase_available,
+        "token_exchange_available": token_exchange_available,
+        "swagger_login_flow": [
+            "POST /api/otp/send  →  enter your email",
+            "POST /auth/token    →  verify OTP, receive id_token",
+            "Swagger Authorize   →  paste id_token as Bearer token",
+        ],
+        "protected_endpoints": [
+            "/api/chat", "/api/briefing", "/api/safety",
+            "/api/voice/transcribe", "/api/voice/respond",
+            "/api/routes/optimize", "/api/routes/share",
+            "/api/trips", "/api/expenses/split",
+            "/api/itinerary/generate", "/api/weather",
+        ],
+        "public_endpoints": ["/", "/health", "/auth/info", "/auth/token", "/api/otp/send", "/api/otp/verify"],
+    }
+
+
+# ─── Auth Token Exchange ────────────────────────────────────────────────────────
+class TokenRequest(BaseModel):
+    email: EmailStr
+    otp: str_4_10
+
+
+@app.post(
+    "/auth/token",
+    tags=["Auth"],
+    summary="Verify OTP and obtain Firebase ID Token",
+    response_description="Firebase ID Token ready for use in Authorization: Bearer header",
+)
+@limiter.limit("5/minute")
+async def auth_token_exchange(request: Request, data: TokenRequest):
+    """
+    ## OTP Verification + Firebase ID Token Exchange
+
+    This is the **primary login endpoint** for Swagger testing and app integration.
+
+    ### Flow:
+    1. Verifies the OTP submitted for the given email
+    2. Creates or retrieves the Firebase user for this email
+    3. Issues a Firebase Custom Token (server-signed)
+    4. Exchanges the Custom Token for a **Firebase ID Token** via Firebase REST API
+    5. Returns the ID Token — paste it directly into Swagger's **Authorize** button
+
+    ### Prerequisites:
+    - Call `POST /api/otp/send` first to receive an OTP at your email
+    - OTPs are valid for **5 minutes** and **single-use**
+
+    ### Swagger Usage:
+    After receiving `id_token`, click **🔓 Authorize** at the top of the page,
+    paste the value, and click **Authorize**. All protected endpoints will unlock.
+
+    ### Notes:
+    - ID Tokens are valid for **1 hour**
+    - If Firebase Admin SDK is not configured, this endpoint returns HTTP 503
+    - If `FIREBASE_WEB_API_KEY` is not set, the response includes a `custom_token`
+      instead — use the Firebase Client SDK to exchange it manually
+    """
+    import httpx
+
+    email = str(data.email)
+
+    # ── Step 1: Verify OTP ────────────────────────────────────────────────────
+    valid = otp_store.verify(email, data.otp)
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired verification code. Request a new OTP via POST /api/otp/send.",
+        )
+
+    # ── Step 2: Firebase Admin must be available ──────────────────────────────
+    if not _firebase_admin_available or _firebase_auth is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Firebase Admin SDK is not configured. "
+                "Set FIREBASE_CREDENTIALS_JSON in Render environment variables. "
+                "See GET /auth/info for setup instructions."
+            ),
+        )
+
+    # ── Step 3: Get or create Firebase user ──────────────────────────────────
+    try:
+        try:
+            user = _firebase_auth.get_user_by_email(email)
+            logger.info("[AUTH/TOKEN] Existing user login: uid=%s", user.uid)
+        except Exception:
+            user = _firebase_auth.create_user(email=email, email_verified=True)
+            logger.info("[AUTH/TOKEN] New user created: uid=%s", user.uid)
+    except Exception as exc:
+        logger.error("[AUTH/TOKEN] Firebase user get/create failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create or retrieve Firebase user. Check Firebase Admin credentials.",
+        )
+
+    # ── Step 4: Create Firebase Custom Token ─────────────────────────────────
+    try:
+        custom_token_bytes = _firebase_auth.create_custom_token(user.uid)
+        custom_token = (
+            custom_token_bytes.decode("utf-8")
+            if isinstance(custom_token_bytes, bytes)
+            else custom_token_bytes
+        )
+    except Exception as exc:
+        logger.error("[AUTH/TOKEN] Custom token creation failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to create authentication token.",
+        )
+
+    # ── Step 5: Exchange Custom Token → ID Token via Firebase REST API ────────
+    web_api_key = os.environ.get("FIREBASE_WEB_API_KEY", "").strip()
+    if not web_api_key:
+        # Can't do the exchange server-side — return custom token with instructions
+        logger.warning(
+            "[AUTH/TOKEN] FIREBASE_WEB_API_KEY not set — returning custom_token only. "
+            "Set FIREBASE_WEB_API_KEY in Render environment variables for full ID token exchange."
+        )
+        return {
+            "success": True,
+            "uid": user.uid,
+            "email": email,
+            "token_type": "custom_token",
+            "custom_token": custom_token,
+            "id_token": None,
+            "warning": (
+                "FIREBASE_WEB_API_KEY is not set. The custom_token above cannot be used directly "
+                "in Swagger. Set FIREBASE_WEB_API_KEY in Render environment variables to enable "
+                "full ID token exchange. Get your Web API Key from: "
+                "Firebase Console → Project Settings → General → Web API Key."
+            ),
+            "manual_exchange_url": (
+                f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
+                f"?key=YOUR_WEB_API_KEY"
+            ),
+        }
+
+    # Exchange via Firebase Identity Toolkit REST API
+    exchange_url = (
+        f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
+        f"?key={web_api_key}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                exchange_url,
+                json={"token": custom_token, "returnSecureToken": True},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            firebase_resp = resp.json()
+    except httpx.HTTPStatusError as exc:
+        err_body = exc.response.text[:500] if exc.response else "(no body)"
+        logger.error("[AUTH/TOKEN] Firebase token exchange HTTP error %s: %s", exc.response.status_code, err_body)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Firebase token exchange failed. Check FIREBASE_WEB_API_KEY.",
+        )
+    except Exception as exc:
+        logger.error("[AUTH/TOKEN] Firebase token exchange error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Firebase token exchange temporarily unavailable.",
+        )
+
+    id_token = firebase_resp.get("idToken", "")
+    expires_in = int(firebase_resp.get("expiresIn", 3600))
+
+    logger.info("[AUTH/TOKEN] ID token issued for uid=%s (expires_in=%ds)", user.uid, expires_in)
+
+    return {
+        "success": True,
+        "uid": user.uid,
+        "email": email,
+        "token_type": "Bearer",
+        "id_token": id_token,
+        "expires_in": expires_in,
+        "swagger_instructions": (
+            "Copy the id_token value above. Click 'Authorize' (🔓) at the top of Swagger, "
+            "paste the id_token, and click Authorize. All protected endpoints will now work."
+        ),
+    }
 
 
 # ─── AI Service Imports ────────────────────────────────────────────────────────
@@ -377,7 +720,7 @@ from src.services.voice import voice_service
 
 
 # ─── Protected: AI Chatbot ─────────────────────────────────────────────────────
-@app.post("/api/chat")
+@app.post("/api/chat", tags=["AI"])
 @limiter.limit("20/minute")
 async def chat_helper(
     request: Request,
@@ -394,7 +737,7 @@ async def chat_helper(
 
 
 # ─── Protected: AI Voice Briefing ─────────────────────────────────────────────
-@app.post("/api/briefing")
+@app.post("/api/briefing", tags=["AI"])
 @limiter.limit("20/minute")
 async def briefing_helper(
     request: Request,
@@ -410,7 +753,7 @@ async def briefing_helper(
 
 
 # ─── Protected: City Safety Score ─────────────────────────────────────────────
-@app.get("/api/safety")
+@app.get("/api/safety", tags=["Safety"])
 @limiter.limit("30/minute")
 async def safety_score(
     request: Request,
@@ -426,7 +769,7 @@ async def safety_score(
 
 
 # ─── Protected: Voice Transcribe ──────────────────────────────────────────────
-@app.post("/api/voice/transcribe")
+@app.post("/api/voice/transcribe", tags=["Voice"])
 @limiter.limit("10/minute")
 async def transcribe_voice(
     request: Request,
@@ -453,7 +796,7 @@ async def transcribe_voice(
 
 
 # ─── Protected: Voice Respond ─────────────────────────────────────────────────
-@app.post("/api/voice/respond")
+@app.post("/api/voice/respond", tags=["Voice"])
 @limiter.limit("20/minute")
 async def voice_respond_helper(
     request: Request,
@@ -469,7 +812,7 @@ async def voice_respond_helper(
 
 
 # ─── Protected: TSP Route Optimizer ───────────────────────────────────────────
-@app.post("/api/routes/optimize")
+@app.post("/api/routes/optimize", tags=["Routes"])
 @limiter.limit("30/minute")
 async def optimize_route(
     request: Request,
@@ -501,7 +844,7 @@ async def optimize_route(
 
 
 # ─── Protected: Trip Management ───────────────────────────────────────────────
-@app.get("/api/trips")
+@app.get("/api/trips", tags=["Trips"])
 @limiter.limit("30/minute")
 async def get_trips(
     request: Request,
@@ -536,7 +879,7 @@ async def get_trips(
     }
 
 
-@app.post("/api/trips")
+@app.post("/api/trips", tags=["Trips"])
 @limiter.limit("20/minute")
 async def create_trip(
     request: Request,
@@ -556,7 +899,7 @@ async def create_trip(
 
 
 # ─── Protected: Expense Split ─────────────────────────────────────────────────
-@app.post("/api/expenses/split")
+@app.post("/api/expenses/split", tags=["Expenses"])
 @limiter.limit("30/minute")
 async def split_expense(
     request: Request,
@@ -574,7 +917,7 @@ async def split_expense(
 
 
 # ─── Protected: AI Itinerary Generator ────────────────────────────────────────
-@app.post("/api/itinerary/generate")
+@app.post("/api/itinerary/generate", tags=["AI"])
 @limiter.limit("10/minute")
 async def generate_itinerary(
     request: Request,
@@ -590,7 +933,7 @@ async def generate_itinerary(
 
 
 # ─── Protected: Weather Proxy ─────────────────────────────────────────────────
-@app.get("/api/weather")
+@app.get("/api/weather", tags=["Weather"])
 @limiter.limit("30/minute")
 async def weather_proxy(
     request: Request,
@@ -617,7 +960,7 @@ async def weather_proxy(
 
 # ─── OTP: Send (rate-limited, OTP NOT in response) ────────────────────────────
 # CWE-287: OTP in response FIXED | CWE-307: Rate limiting added
-@app.post("/api/otp/send")
+@app.post("/api/otp/send", tags=["OTP"])
 @limiter.limit("3/minute")
 async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
     """
@@ -709,7 +1052,7 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
     }
 
 
-@app.post("/api/otp/verify")
+@app.post("/api/otp/verify", tags=["OTP"], deprecated=True, summary="[Deprecated] Verify OTP (use POST /auth/token instead)")
 @limiter.limit("5/minute")
 async def verify_otp_endpoint(request: Request, data: OTPVerifyRequest):
     """
@@ -748,7 +1091,7 @@ async def verify_otp_endpoint(request: Request, data: OTPVerifyRequest):
 
 
 # ─── Protected: Route Sharing ─────────────────────────────────────────────────
-@app.post("/api/routes/share")
+@app.post("/api/routes/share", tags=["Routes"])
 @limiter.limit("20/minute")
 async def share_route_endpoint(
     request: Request,
