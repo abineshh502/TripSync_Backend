@@ -968,7 +968,18 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
     Rate limited to 3 requests/minute/IP.
     OTP expires after OTP_TTL_SECONDS (default 300s = 5min).
     Maximum OTP_MAX_ATTEMPTS (default 3) verification attempts.
+
+    **Email providers** (in priority order):
+    1. **Resend API** — set `RESEND_API_KEY` in environment variables.
+       Sign up free at https://resend.com (100 emails/day free).
+    2. **SMTP** — set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`.
+       Note: SMTP ports 465/587 are blocked on Render's free tier.
+
+    **Test bypass:** Emails ending in `@example.com`, `@tripsync.org`, or
+    `@tripsync.com` skip actual sending and always return success — useful
+    for Swagger testing when email is not configured.
     """
+    import asyncio
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -978,8 +989,8 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
     # Generate OTP and store securely (single-use + expiry + retry limit)
     otp_code = otp_store.generate(email_to)
 
-    subject = "Your TripSync OTP Verification Code 🔐"
-    body = f"""
+    subject = "Your TripSync OTP Verification Code"
+    html_body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #0F172A; color: white; padding: 20px; border-radius: 12px;">
         <h2 style="color: #38BDF8;">TripSync Verification Code</h2>
@@ -994,50 +1005,142 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
       </body>
     </html>
     """
-
-    smtp_host = settings.SMTP_HOST
-    smtp_port = settings.SMTP_PORT
-    smtp_user = settings.SMTP_USER
-    smtp_pass = settings.SMTP_PASS
+    plain_body = (
+        f"Your TripSync OTP is: {otp_code}\n"
+        "Valid for 5 minutes.\n"
+        "If you did not request this, ignore this email."
+    )
 
     email_sent = False
 
+    # ── Test bypass: avoid sending for known test domains ──────────────────
     if email_to.endswith("@example.com") or email_to.endswith("@tripsync.org") or email_to.endswith("@tripsync.com"):
         email_sent = True
-        logger.info("[OTP] Bypass SMTP: Test email for %s logged.", _mask_email_log(email_to))
-    elif smtp_user and smtp_pass:
+        logger.info("[OTP] Bypass send: Test email for %s logged.", _mask_email_log(email_to))
+
+    # ── Primary: Resend HTTP API (works on Render free tier) ───────────────
+    elif os.environ.get("RESEND_API_KEY", "").strip():
+        resend_api_key = os.environ["RESEND_API_KEY"].strip()
+        resend_from = os.environ.get(
+            "RESEND_FROM_EMAIL", "TripSync <noreply@tripsync.resend.dev>"
+        ).strip()
         try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = smtp_user
-            msg["To"] = email_to
-            plain = "Your TripSync OTP is: " + str(otp_code) + "\nValid for 5 minutes.\nIf you did not request this, ignore this email."
-            msg.attach(MIMEText(plain, "plain"))
-            msg.attach(MIMEText(body, "html"))
-            if smtp_port == 465:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=5)
-            else:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=5)
-                server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, email_to, msg.as_string())
-            server.quit()
+            import resend as resend_lib
+            resend_lib.api_key = resend_api_key
+
+            def _send_resend() -> None:
+                resend_lib.Emails.send({
+                    "from": resend_from,
+                    "to": [email_to],
+                    "subject": subject,
+                    "html": html_body,
+                    "text": plain_body,
+                })
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _send_resend)
             email_sent = True
-            # Log email sent without OTP (CWE-312 FIXED — OTP never logged)
-            logger.info("[OTP] Email sent to %s", _mask_email_log(email_to))
-        except smtplib.SMTPAuthenticationError:
-            logger.error("[OTP] SMTP authentication failed")
-            otp_store.invalidate(email_to)  # Invalidate on send failure
-            raise HTTPException(status_code=502, detail="Email service authentication failed.")
-        except Exception:
-            logger.exception("[OTP] Failed to send OTP email")
+            logger.info("[OTP] Email sent via Resend to %s", _mask_email_log(email_to))
+        except Exception as exc:
+            logger.error(
+                "[OTP] Resend API error | %s: %s",
+                type(exc).__name__, exc, exc_info=True
+            )
             otp_store.invalidate(email_to)
-            raise HTTPException(status_code=502, detail="Failed to send verification email.")
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Email delivery failed via Resend ({type(exc).__name__}). "
+                    "Check RESEND_API_KEY in Render environment variables and "
+                    "verify the sender domain at https://resend.com/domains. "
+                    "Check Render logs for details."
+                ),
+            )
+
+    # ── Fallback: SMTP (for local dev — blocked on Render free tier) ──────
+    elif settings.SMTP_USER and settings.SMTP_PASS:
+        smtp_host = settings.SMTP_HOST
+        smtp_port = settings.SMTP_PORT
+        smtp_user = settings.SMTP_USER
+        smtp_pass = settings.SMTP_PASS
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = email_to
+        msg.attach(MIMEText(plain_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+        msg_str = msg.as_string()
+
+        def _send_smtp() -> None:
+            SMTP_TIMEOUT = 15
+            if smtp_port == 465:
+                logger.info("[OTP] Connecting via SMTP_SSL to %s:%s", smtp_host, smtp_port)
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=SMTP_TIMEOUT) as srv:
+                    srv.ehlo()
+                    srv.login(smtp_user, smtp_pass)
+                    srv.sendmail(smtp_user, email_to, msg_str)
+            else:
+                logger.info("[OTP] Connecting via SMTP+STARTTLS to %s:%s", smtp_host, smtp_port)
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=SMTP_TIMEOUT) as srv:
+                    srv.ehlo()
+                    srv.starttls()
+                    srv.ehlo()
+                    srv.login(smtp_user, smtp_pass)
+                    srv.sendmail(smtp_user, email_to, msg_str)
+
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _send_smtp)
+            email_sent = True
+            logger.info("[OTP] Email sent via SMTP to %s", _mask_email_log(email_to))
+        except smtplib.SMTPAuthenticationError as exc:
+            logger.error(
+                "[OTP] SMTP auth failed for user=%s | %s: %s",
+                smtp_user, type(exc).__name__, exc
+            )
+            otp_store.invalidate(email_to)
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Email service authentication failed. "
+                    "Check SMTP_USER and SMTP_PASS. "
+                    "For Gmail: use an App Password, not your account password. "
+                    "Recommended: use Resend instead (set RESEND_API_KEY)."
+                ),
+            )
+        except (TimeoutError, ConnectionRefusedError, OSError) as exc:
+            logger.error(
+                "[OTP] SMTP network error to %s:%s | %s: %s",
+                smtp_host, smtp_port, type(exc).__name__, exc
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Email service network error: {type(exc).__name__}. "
+                    "SMTP port may be blocked (common on Render free tier). "
+                    "Switch to Resend: set RESEND_API_KEY in Render environment variables "
+                    "(free at https://resend.com)."
+                ),
+            )
+        except Exception as exc:
+            logger.error(
+                "[OTP] Unexpected SMTP error | %s: %s",
+                type(exc).__name__, exc, exc_info=True
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Failed to send verification email ({type(exc).__name__}). "
+                    "Check Render logs. Recommended: use Resend (set RESEND_API_KEY)."
+                ),
+            )
+
     else:
-        # SMTP not configured — log warning WITHOUT the OTP code (CWE-312 FIXED)
+        # No email provider configured
         logger.warning(
-            "[OTP] SMTP not configured. OTP generated for %s but NOT sent. "
-            "Configure SMTP_USER and SMTP_PASS.",
+            "[OTP] No email provider configured. OTP generated for %s but NOT sent. "
+            "Set RESEND_API_KEY (recommended) or SMTP_USER+SMTP_PASS.",
             _mask_email_log(email_to),
         )
 
@@ -1047,7 +1150,10 @@ async def send_otp_email_endpoint(request: Request, data: OTPSendRequest):
         "message": (
             "Verification code sent to your email address."
             if email_sent
-            else "Email service not configured. Contact support."
+            else (
+                "Email service not configured. "
+                "Set RESEND_API_KEY in Render environment variables."
+            )
         ),
     }
 
