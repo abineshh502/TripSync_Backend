@@ -60,12 +60,14 @@ def _parse_cors_origins() -> list[str]:
         ]
 
     # Production with no explicit CORS_ALLOWED_ORIGINS configured:
-    # Allow Vercel production Web App, local web clients, and mobile app webview origins
+    # Allow Vercel production Web App, GitHub Pages, local web clients, and mobile app webview origins
     logger.info(
-        "[CONFIG] Using standard production/mobile default CORS origins (https://tripsync.vercel.app, capacitor://localhost, ionic://localhost)."
+        "[CONFIG] Using standard production/mobile default CORS origins."
     )
     return [
+        "https://trip-sync-web.vercel.app",
         "https://tripsync.vercel.app",
+        "https://abineshh502.github.io",
         "http://localhost:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3000",
